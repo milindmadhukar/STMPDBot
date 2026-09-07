@@ -630,6 +630,88 @@ func TestSongChoiceValue_FitsDiscordsOptionValueLimit(t *testing.T) {
 	}
 }
 
+// The quiz shows lyrics and asks for the song's title, so it may only serve records
+// that are actually the monitored acts'. Crediting one of them is not enough: a remix
+// credit names both acts, so "Can't Feel My Face" came back as "The Weeknd, Martin
+// Garrix" and the quiz spent The Weeknd's words asking people to name a Martin Garrix
+// song. "Cocoon" is 070 Shake's and did the same.
+//
+// Which side of the remix our act is on is the whole distinction, so both directions
+// are pinned here. Our act in the remixer slot means the record belongs to whoever we
+// remixed; anyone else there means one of our own songs in someone else's hands, whose
+// lyrics are still ours to quiz on.
+//
+// Both draws are random, so the test samples rather than asking once. It assumes the
+// dedicated test database of the package docs, where the pool it is drawing from is
+// the handful of rows below.
+func TestGetRandomSongWithLyrics_ExcludesOurRemixesOfOtherActsRecords(t *testing.T) {
+	t.Parallel()
+
+	q := queries(t)
+	ctx := context.Background()
+
+	// Our act as the remixer: the record, and the words, are The Weeknd's.
+	theirs := insertBeatportSong(t, q, db.InsertBeatportSongParams{
+		Name: testSongName(t, "Can't Feel My Face"), Artists: "The Weeknd, Martin Garrix",
+		ReleaseDate: text("2026-01-01"), BeatportID: int4(beatportID()),
+		MixName: text("Martin Garrix Remix"),
+	})
+
+	// Our act as the artist, someone else remixing: still our song and our words.
+	ours := insertBeatportSong(t, q, db.InsertBeatportSongParams{
+		Name: testSongName(t, "La La La"), Artists: "AREA21, Drove",
+		ReleaseDate: text("2026-01-01"), BeatportID: int4(beatportID()),
+		MixName: text("Drove Remix"),
+	})
+
+	// An ordinary song, so neither loop below can pass on an empty pool.
+	plain := insertBeatportSong(t, q, db.InsertBeatportSongParams{
+		Name: testSongName(t, "Animals"), Artists: "Martin Garrix",
+		ReleaseDate: text("2026-01-01"), BeatportID: int4(beatportID()),
+	})
+
+	for _, id := range []int64{theirs.ID, ours.ID, plain.ID} {
+		if _, err := testPool.Exec(ctx,
+			"UPDATE songs SET lyrics = $2 WHERE id = $1",
+			id, "we go where nobody knows"); err != nil {
+			t.Fatalf("failed to set lyrics: %v", err)
+		}
+	}
+
+	var sawOurs bool
+	for range 200 {
+		got, err := q.GetRandomSongWithLyrics(ctx)
+		if err != nil {
+			t.Fatalf("GetRandomSongWithLyrics failed: %v", err)
+		}
+		if got.ID == theirs.ID {
+			t.Fatalf("the quiz served %q (%s), a remix of another act's record; "+
+				"its lyrics are not the monitored acts' to quiz on", got.Name, got.MixName.String)
+		}
+		if got.ID == ours.ID {
+			sawOurs = true
+		}
+	}
+	if !sawOurs {
+		t.Errorf("%q (%s) never came up: a remix of one of our own songs is still "+
+			"ours, and excluding it would cost the quiz real material",
+			ours.Name, ours.MixName.String)
+	}
+
+	// The easy query narrows which acts qualify, not what counts as their song. The
+	// AREA21 row is out of its scope, so only the exclusion is checked here.
+	for range 200 {
+		got, err := q.GetRandomSongWithLyricsEasy(ctx)
+		if err != nil {
+			t.Fatalf("GetRandomSongWithLyricsEasy failed: %v", err)
+		}
+		if got.ID == theirs.ID {
+			t.Fatalf("the easy quiz served %q (%s), a remix of another act's record",
+				got.Name, got.MixName.String)
+		}
+	}
+}
+
 // locked_fields is what makes hand-correcting the catalogue worth doing.
 //
 // Four automated writers rewrite these same columns forever -- the STMPD and Beatport

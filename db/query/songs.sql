@@ -94,6 +94,17 @@ LIMIT 20;
 -- name: GetRandomSongWithLyrics :one
 -- '%ytram%' was '%ytrram%'. The typo meant no Ytram song has ever been served by
 -- the quiz; config.toml's monitored-artist list confirms the correct spelling.
+--
+-- Crediting one of the monitored acts is not the same as the song being theirs. On a
+-- remix the credit line names both acts, so "The Weeknd, Martin Garrix" matched here
+-- and the quiz asked people to name a Weeknd record from Weeknd lyrics -- the answer
+-- "Can't Feel My Face" is not a Martin Garrix song, it is a Martin Garrix remix of
+-- someone else's. Same for "Cocoon", which is 070 Shake's.
+--
+-- mix_name is what separates the two cases, because it names the remixer and not the
+-- artist. Our act in the remixer slot means the record belongs to whoever we remixed,
+-- so it is dropped; anyone else there ("La La La (Drove Remix)") means one of our own
+-- songs in someone else's hands, whose lyrics are still ours to quiz on.
 SELECT * FROM songs
 WHERE lyrics IS NOT NULL
 AND NOT is_instrumental
@@ -103,16 +114,28 @@ AND (LOWER(artists) LIKE '%martin garrix%'
    OR LOWER(artists) LIKE '%area21%'
    OR LOWER(artists) LIKE '%ytram%'
    OR LOWER(artists) LIKE '%grx%')
+AND NOT (LOWER(COALESCE(mix_name, '')) LIKE '%remix%'
+   AND (LOWER(mix_name) LIKE '%martin garrix%'
+      OR LOWER(mix_name) LIKE '%area21%'
+      OR LOWER(mix_name) LIKE '%ytram%'
+      OR LOWER(mix_name) LIKE '%grx%'))
 ORDER BY RANDOM()
 LIMIT 1;
 
 -- name: GetRandomSongWithLyricsEasy :one
+-- Carries the same remix exclusion as GetRandomSongWithLyrics above, for the same
+-- reason: "easy" narrows which acts qualify, not what counts as their song.
 SELECT * FROM songs
 WHERE lyrics IS NOT NULL
 AND NOT is_instrumental
 AND NOT is_collection
 AND parent_song_id IS NULL
 AND LOWER(artists) LIKE '%martin garrix%'
+AND NOT (LOWER(COALESCE(mix_name, '')) LIKE '%remix%'
+   AND (LOWER(mix_name) LIKE '%martin garrix%'
+      OR LOWER(mix_name) LIKE '%area21%'
+      OR LOWER(mix_name) LIKE '%ytram%'
+      OR LOWER(mix_name) LIKE '%grx%'))
 ORDER BY RANDOM()
 LIMIT 1;
 
