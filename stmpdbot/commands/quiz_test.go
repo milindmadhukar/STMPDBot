@@ -84,6 +84,15 @@ func TestFilterValidLines(t *testing.T) {
 			answers: []string{"It's Alright (Not)", "It's Alright", "Not"},
 			want:    []string{"there is nothing left to say"},
 		},
+		{
+			// The Voodoo round: a hand-pasted synced lyric left "[02:14.11]" as its own
+			// line, an instrumental-break marker with no lyric text after the tag. At
+			// ten characters it beat the length filter and became the only clue shown.
+			name:    "a bare LRC timestamp is dropped, not judged on its own length",
+			lines:   []string{"[02:14.11]", "[00:12.42] a proper lyric line"},
+			answers: one("Animals"),
+			want:    []string{"a proper lyric line"},
+		},
 	}
 
 	for _, tt := range tests {
