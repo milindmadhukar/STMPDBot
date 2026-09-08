@@ -29,9 +29,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,8 +38,7 @@ import (
 )
 
 var (
-	minMessages  = flag.Int("min-messages", 20, "skip authors with fewer messages than this in the whole corpus")
-	minLength    = flag.Int("min-length", 60, "skip messages shorter than this many characters")
+	minMessages  = flag.Int("min-messages", ai.MinAuthorMessages, "skip authors with fewer messages than this in the whole corpus")
 	perAuthor    = flag.Int("per-author", 120, "at most this many messages per author, newest first")
 	batchSize    = flag.Int("batch", 20, "messages per mem0 extraction call")
 	maxAuthors   = flag.Int("max-authors", 0, "stop after this many authors (0 = no limit)")
@@ -56,33 +53,6 @@ var (
 // to leave it alone. These are things nobody consented to having stored in a
 // vector database, and the cheapest place to enforce that is before the API
 // call, not after.
-// discordMarkup is stripped before anything is judged sensitive. Emoji
-// (<:name:974200733878616104>), mentions (<@424555707187068929>) and CDN links
-// are all long digit runs, and a naive phone-number pattern matches every one
-// of them: on this corpus that misread 14,542 messages -- including most of
-// the ones with any personality in them -- as leaked phone numbers.
-var discordMarkup = regexp.MustCompile(`<a?:\w+:\d+>|<@[!&]?\d+>|<#\d+>|https?://\S+`)
-
-// Applied to the SCRUBBED text, and every pattern demands real structure: a
-// bare run of digits is a Discord snowflake far more often than it is a phone
-// number, so the phone patterns require separators in phone-like positions.
-var sensitive = regexp.MustCompile(`(?i)` + strings.Join([]string{
-	`[\w.+-]+@[\w-]+\.[a-z]{2,}`,                                         // email addresses
-	`\+\d{1,3}[\s.-]\d{2,4}[\s.-]\d{3,4}[\s.-]?\d{0,4}`,                  // +CC NNN NNN NNNN
-	`\b\d{3}[\s.-]\d{3}[\s.-]\d{4}\b`,                                    // NNN-NNN-NNNN
-	`discord\.gg/\S+`,                                                    // invites
-	`\b(?:sk|xox[bp]|ghp)_[A-Za-z0-9_-]{8,}`,                             // api tokens
-	`\b\d{1,5}\s+[A-Za-z]+\s+(?:street|st|road|rd|avenue|ave|lane|ln)\b`, // street addresses
-	`\b(?:my|his|her|their)\s+(?:address|postcode|zip|phone number)\b`,
-}, "|"))
-
-// noise is what a message has to not be to be worth an LLM call.
-var (
-	bareLink  = regexp.MustCompile(`^\s*https?://\S+\s*$`)
-	onlyEmoji = regexp.MustCompile(`^[\s\p{So}\p{Sk}:_<>0-9a-zA-Z]*$`)
-	command   = regexp.MustCompile(`^\s*[!/$.]\w+`)
-)
-
 type authorBatch struct {
 	authorID int64
 	guildID  int64
@@ -184,18 +154,21 @@ func collect(ctx context.Context, env *script.Env) ([]authorBatch, stats) {
 		}
 		st.total++
 
-		content = strings.TrimSpace(content)
-		switch {
-		case len(content) < *minLength:
+		// Shared with the nightly digest -- see stmpdbot/ai/salience.go for
+		// why the two passes must not drift apart.
+		kept, verdict := ai.Judge(content)
+		switch verdict {
+		case ai.TooShort:
 			st.short++
 			continue
-		case bareLink.MatchString(content), command.MatchString(content), onlyEmoji.MatchString(content):
+		case ai.Noise:
 			st.noise++
 			continue
-		case sensitive.MatchString(discordMarkup.ReplaceAllString(content, " ")):
+		case ai.Sensitive:
 			st.sensitive++
 			continue
 		}
+		content = kept
 
 		b := byAuthor[authorID]
 		if b == nil {

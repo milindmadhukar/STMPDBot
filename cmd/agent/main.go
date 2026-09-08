@@ -95,6 +95,12 @@ func main() {
 		secret:  cfg.Agent.Secret,
 	}
 
+	// The nightly digest is what keeps memory current between conversations.
+	// Only started when there is somewhere to write to.
+	if memory.Enabled() {
+		go runDigestLoop(ctx, pool, memory)
+	}
+
 	addr := cfg.Agent.Address
 	if addr == "" {
 		addr = ":8083"
