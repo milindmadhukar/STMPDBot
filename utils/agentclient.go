@@ -24,7 +24,9 @@ type AgentClient struct {
 
 func NewAgentClient(baseURL, secret string) *AgentClient {
 	return &AgentClient{
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		// Must outlast the agent's own work: it downloads and rescales any
+		// attachments before the model round-trip even starts.
+		httpClient: &http.Client{Timeout: 90 * time.Second},
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		secret:     secret,
 	}
@@ -37,6 +39,26 @@ func NewAgentClient(baseURL, secret string) *AgentClient {
 type AgentMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Attachments is the media that came with the message -- an upload, a
+	// sticker, the image off a link preview. Metadata only: the URLs are
+	// Discord's own, and the agent service is what fetches them, because
+	// deciding what a model can be shown belongs with the model.
+	Attachments []AgentAttachment `json:"attachments,omitempty"`
+}
+
+// AgentAttachment mirrors ai.Attachment on the agent side of this call. It is
+// Discord-shaped on purpose: this side reports what was posted, the other side
+// decides what can be done with it.
+type AgentAttachment struct {
+	URL          string  `json:"url"`
+	ContentType  string  `json:"content_type,omitempty"`
+	Filename     string  `json:"filename,omitempty"`
+	Size         int     `json:"size,omitempty"`
+	Description  string  `json:"description,omitempty"`
+	DurationSecs float64 `json:"duration_secs,omitempty"`
+	Width        int     `json:"width,omitempty"`
+	Height       int     `json:"height,omitempty"`
+	Kind         string  `json:"kind,omitempty"`
 }
 
 type agentRespondRequest struct {

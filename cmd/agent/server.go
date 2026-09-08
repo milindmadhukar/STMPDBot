@@ -22,6 +22,11 @@ type server struct {
 type respondMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// Attachments is what the message had hanging off it in Discord --
+	// images, stickers, voice notes, files. The bot sends the metadata only;
+	// this service fetches and converts, because what a model can be shown is
+	// this side's business. See ai/media.go.
+	Attachments []ai.Attachment `json:"attachments,omitempty"`
 }
 
 type respondRequest struct {
@@ -109,10 +114,25 @@ func (s *server) handleRespond(w http.ResponseWriter, r *http.Request) {
 		systemPrompt += "\n\n---\n\n" + memoryCtx
 	}
 
+	// One fetcher per request: its image budget is per conversation. Spend it
+	// newest-first -- req.Messages runs oldest to newest, and the picture
+	// somebody is actually asking about is the one they just posted, not the
+	// meme six hops up the reply chain.
+	fetcher := ai.NewFetcher()
+	parts := make([][]ai.Part, len(req.Messages))
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		m := req.Messages[i]
+		// Only a user turn carries media. An assistant turn is something this
+		// service said, and it says text.
+		if m.Role == "user" && len(m.Attachments) > 0 {
+			parts[i] = fetcher.BuildParts(ctx, m.Content, m.Attachments)
+		}
+	}
+
 	messages := make([]ai.Message, 0, len(req.Messages)+1)
 	messages = append(messages, ai.Message{Role: "system", Content: systemPrompt})
-	for _, m := range req.Messages {
-		messages = append(messages, ai.Message{Role: m.Role, Content: m.Content})
+	for i, m := range req.Messages {
+		messages = append(messages, ai.Message{Role: m.Role, Content: m.Content, Parts: parts[i]})
 	}
 
 	content, err := s.client.Respond(ctx, s.queries, req.GuildID, req.UserID, messages)

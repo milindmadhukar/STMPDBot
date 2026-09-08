@@ -89,7 +89,10 @@ func triggered(b *stmpdbot.STMPDBot, message discord.Message) (isReply, ok bool)
 // dispatch should be blocked for.
 func respond(b *stmpdbot.STMPDBot, e *events.MessageCreate, isReply bool) {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// 90s, not 60: the agent now fetches and rescales attachments before it
+	// even reaches the model, and 60 was already producing the occasional
+	// "context canceled" on a plain text reply.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	if err := b.Client.Rest.SendTyping(e.ChannelID); err != nil {
@@ -133,6 +136,7 @@ func buildConversation(ctx context.Context, b *stmpdbot.STMPDBot, e *events.Mess
 	type turn struct {
 		role    string
 		content string
+		media   []utils.AgentAttachment
 	}
 	var chain []turn
 
@@ -151,7 +155,12 @@ func buildConversation(ctx context.Context, b *stmpdbot.STMPDBot, e *events.Mess
 			}
 			refMsg = fetched
 		}
-		if refMsg.Content == "" {
+		media := mediaOf(*refMsg)
+		// A message with no text at all used to end the walk. That silently
+		// truncated every chain containing a bare screenshot or reaction GIF
+		// -- the most common kind of image message there is. Only a genuinely
+		// empty message stops it now.
+		if refMsg.Content == "" && len(media) == 0 {
 			break
 		}
 
@@ -159,23 +168,42 @@ func buildConversation(ctx context.Context, b *stmpdbot.STMPDBot, e *events.Mess
 		if refMsg.Author.ID == selfID {
 			role = "assistant"
 		}
-		content := resolveMentions(ctx, b, *e.GuildID, refMsg.Content, refMsg.Mentions)
-		chain = append(chain, turn{role: role, content: content})
+		content := renderEmoji(resolveMentions(ctx, b, *e.GuildID, refMsg.Content, refMsg.Mentions))
+		chain = append(chain, turn{role: role, content: content, media: media})
 		current = *refMsg
 	}
 
 	messages := make([]utils.AgentMessage, 0, len(chain)+1)
 	for i := len(chain) - 1; i >= 0; i-- {
-		messages = append(messages, utils.AgentMessage{Role: chain[i].role, Content: chain[i].content})
+		messages = append(messages, utils.AgentMessage{
+			Role:        chain[i].role,
+			Content:     chain[i].content,
+			Attachments: chain[i].media,
+		})
 	}
 	messages = append(messages, utils.AgentMessage{
-		Role:    "user",
-		Content: resolveMentions(ctx, b, *e.GuildID, e.Message.Content, e.Message.Mentions),
+		Role:        "user",
+		Content:     renderEmoji(resolveMentions(ctx, b, *e.GuildID, e.Message.Content, e.Message.Mentions)),
+		Attachments: mediaOf(e.Message),
 	})
 	return messages
 }
 
 var mentionPattern = regexp.MustCompile(`<@!?(\d+)>`)
+
+// emojiPattern matches a custom emoji, animated (<a:name:id>) or not.
+var emojiPattern = regexp.MustCompile(`<a?:([A-Za-z0-9_]+):\d+>`)
+
+// renderEmoji turns <:pepeSTMPD:12345> into :pepeSTMPD:. The image itself is
+// not worth a vision round-trip -- an emoji is used for its name far more
+// than its picture -- but the raw token is unreadable, and a message that is
+// nothing but emoji otherwise arrives as a wall of snowflakes.
+func renderEmoji(content string) string {
+	if !strings.Contains(content, ":") {
+		return content
+	}
+	return emojiPattern.ReplaceAllString(content, ":$1:")
+}
 
 // resolveMentions replaces Discord's raw <@id> mention syntax with a readable
 // display name, so the model sees "what do you think about Sourav?" instead
