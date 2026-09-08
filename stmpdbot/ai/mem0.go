@@ -83,6 +83,21 @@ func NewMemory(baseURL, apiKey, agentID string) *Memory {
 // receiver answers it rather than panicking at the call site.
 func (m *Memory) Enabled() bool { return m != nil }
 
+// SetWriteTimeout widens the leash on writes, for callers that hand mem0 a
+// whole batch of messages at once rather than a single fact.
+//
+// The default is sized for the interactive path, where one short assertion
+// extracts in about eight seconds. A batch of forty real messages is a much
+// larger prompt and routinely takes several times that -- the history backfill
+// lost batches to the default before this existed. Not for the request path:
+// nothing a person is waiting on should be given a longer deadline.
+func (m *Memory) SetWriteTimeout(d time.Duration) {
+	if m == nil || d <= 0 {
+		return
+	}
+	m.writeClient.Timeout = d
+}
+
 // Record is one remembered fact.
 type Record struct {
 	ID        string         `json:"id"`

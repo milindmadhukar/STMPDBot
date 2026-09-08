@@ -43,12 +43,13 @@ var (
 	minMessages  = flag.Int("min-messages", 20, "skip authors with fewer messages than this in the whole corpus")
 	minLength    = flag.Int("min-length", 60, "skip messages shorter than this many characters")
 	perAuthor    = flag.Int("per-author", 120, "at most this many messages per author, newest first")
-	batchSize    = flag.Int("batch", 40, "messages per mem0 extraction call")
+	batchSize    = flag.Int("batch", 20, "messages per mem0 extraction call")
 	maxAuthors   = flag.Int("max-authors", 0, "stop after this many authors (0 = no limit)")
 	sinceDays    = flag.Int("since-days", 0, "only consider messages newer than this many days (0 = all history)")
 	guildFlag    = flag.Int64("guild", 0, "only this guild (0 = all)")
 	includeLegcy = flag.Bool("include-legacy", false, "also migrate rows from the old agent_memory table")
-	concurrency  = flag.Int("concurrency", 4, "how many mem0 extraction calls to run at once")
+	concurrency  = flag.Int("concurrency", 3, "how many mem0 extraction calls to run at once")
+	callTimeout  = flag.Duration("call-timeout", 4*time.Minute, "how long to wait for one mem0 extraction call")
 )
 
 // sensitive drops a message outright rather than trusting the extraction model
@@ -100,6 +101,10 @@ func main() {
 	if !mem.Enabled() {
 		script.Fatal("agent.memory_url is not set in the given config -- there is nowhere to write to", nil)
 	}
+	// A batch of real messages is a far bigger prompt than the single
+	// assertion the interactive path sends, and extraction scales with it.
+	mem.SetWriteTimeout(*callTimeout)
+
 	slog.Info("Target",
 		slog.String("mem0", env.Config.Agent.MemoryURL),
 		slog.String("agent_id", env.Config.Agent.ResolvedMemoryAgentID()),
@@ -125,8 +130,10 @@ func main() {
 	slog.Info("Planned work",
 		slog.Int("mem0_calls", calls),
 		slog.Int("concurrency", max(*concurrency, 1)),
+		// ~35s per batched call, measured on this corpus. A single-sentence
+		// write is ~8s; a batch of dozens of messages is not.
 		slog.String("est_wall_clock",
-			(time.Duration(calls)*8*time.Second/time.Duration(max(*concurrency, 1))).Truncate(time.Minute).String()))
+			(time.Duration(calls)*35*time.Second/time.Duration(max(*concurrency, 1))).Truncate(time.Minute).String()))
 
 	if env.DryRun {
 		sample(batches)
