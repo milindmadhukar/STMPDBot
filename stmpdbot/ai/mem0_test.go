@@ -47,6 +47,19 @@ func newFakeMem0(t *testing.T) (*fakeMem0, *Memory) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/memories":
 			_ = json.NewEncoder(w).Encode(resultsResponse{Results: records})
+		case r.Method == http.MethodPost && r.URL.Path == "/search":
+			// Answer from the seeded records, keyed by the filter the client
+			// sent -- otherwise every search "finds" something and the
+			// empty-result path can never be tested.
+			var hits []Record
+			if filters, ok := body["filters"].(map[string]any); ok {
+				if key, ok := filters["user_id"].(string); ok {
+					f.mu.Lock()
+					hits = f.records[key]
+					f.mu.Unlock()
+				}
+			}
+			_ = json.NewEncoder(w).Encode(resultsResponse{Results: hits})
 		case r.Method == http.MethodPost:
 			_ = json.NewEncoder(w).Encode(resultsResponse{Results: []Record{{ID: "new-id", Memory: "stored"}}})
 		default:
@@ -341,4 +354,87 @@ func waitFor(t *testing.T, f *fakeMem0, want int) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("no request arrived after waiting; got %d, want %d", f.count(), want)
+}
+
+// The bug this guards: every one of the first 11,243 memories was written
+// "personal", so the shared pool was never used and nothing the bot learned
+// was ever available to anyone but the person who said it. A fact about a
+// track belongs to everyone; only facts about a person are theirs.
+func TestRecallSearchesBothScopesByDefault(t *testing.T) {
+	t.Parallel()
+
+	f, m := newFakeMem0(t)
+	ctx := context.Background()
+
+	if _, err := dispatchMemoryTool(ctx, m, 7, 42, "recall", `{"query":"breakaway lasers"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var searchedPersonal, searchedShared bool
+	for _, req := range f.requests {
+		filters, ok := req.Body["filters"].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch filters["user_id"] {
+		case "discord:42":
+			searchedPersonal = true
+		case "discord-guild:7":
+			searchedShared = true
+		}
+	}
+	if !searchedPersonal || !searchedShared {
+		t.Errorf("recall searched personal=%v shared=%v; a question about a track is not about the asker",
+			searchedPersonal, searchedShared)
+	}
+}
+
+func TestRecallNarrowsWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	for _, tc := range []struct{ scope, wantKey string }{
+		{"personal", "discord:42"},
+		{"shared", "discord-guild:7"},
+	} {
+		f, m := newFakeMem0(t)
+		if _, err := dispatchMemoryTool(ctx, m, 7, 42, "recall",
+			`{"query":"x","scope":"`+tc.scope+`"}`); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		filters, _ := f.requests[0].Body["filters"].(map[string]any)
+		f.mu.Unlock()
+		if filters["user_id"] != tc.wantKey {
+			t.Errorf("scope %q searched %v, want %q", tc.scope, filters["user_id"], tc.wantKey)
+		}
+	}
+}
+
+// An empty result has to say so out loud: a bare empty list reads as "nothing
+// to add" and the model fills the silence by inventing a colour.
+func TestRecallSaysWhenItFoundNothing(t *testing.T) {
+	t.Parallel()
+
+	_, m := newFakeMem0(t)
+	out, err := dispatchMemoryTool(context.Background(), m, 7, 42, "recall", `{"query":"nothing here"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "rather than guessing") {
+		t.Errorf("empty recall returned %s; it must tell the model not to guess", out)
+	}
+}
+
+func TestRecallRejectsAnUnknownScope(t *testing.T) {
+	t.Parallel()
+
+	_, m := newFakeMem0(t)
+	if _, err := dispatchMemoryTool(context.Background(), m, 7, 42, "recall",
+		`{"query":"x","scope":"everyone"}`); err == nil {
+		t.Error("an invented scope was accepted")
+	}
 }

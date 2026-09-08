@@ -81,29 +81,42 @@ func memoryTools() []Tool {
 	return []Tool{
 		{Type: "function", Function: ToolFunction{
 			Name: "remember",
-			Description: "Save something worth carrying into future conversations: a preference, what someone does, a running joke, a correction they made. " +
-				"Use \"personal\" for something about the person you're talking to -- it follows them into every server, and only they can trigger it. " +
-				"Use \"shared\" only for something true of the whole server that anyone may hear back. " +
-				"Never save anything sensitive: addresses, contact details, anything said in confidence, anything about a third party who isn't here. " +
-				"Don't narrate that you're saving it, and don't do it on every message -- only when it would actually matter next time.",
+			Description: "Save something worth carrying into future conversations.\n\n" +
+				"CHOOSE THE SCOPE BY WHAT THE FACT IS ABOUT, NOT BY WHO TOLD YOU IT.\n\n" +
+				"\"shared\" -- a fact about the world that would be true no matter who said it, and that " +
+				"anyone here may hear back: what a track sounds like, what its visuals or lasers look like, " +
+				"when something released, who produced it, what happened at a show, how this server works, " +
+				"an in-joke everyone is in on. If somebody tells you a fact about music or a show, it is " +
+				"almost always this. When someone says \"remember that X\" about anything other than " +
+				"themselves, they mean it for everyone -- use shared.\n\n" +
+				"\"personal\" -- a fact about the person you are talking to specifically: their taste, their " +
+				"opinion, what they are working on, where they were, a running joke between you and them. " +
+				"Only ever surfaces in a conversation with them.\n\n" +
+				"Examples. \"Breakaway's live visuals use green and purple lasers\" is shared, it is about the " +
+				"track. \"You think Breakaway is better than Carry You\" is personal, it is their opinion. " +
+				"\"Martin Garrix played Limitless at Ultra 2026\" is shared. \"You were at that show\" is personal.\n\n" +
+				"Never save anything sensitive: addresses, contact details, anything said in confidence, " +
+				"anything about a third party who isn't here. Don't narrate that you're saving it, and don't " +
+				"do it on every message -- only when it would actually matter next time.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"scope": {"type": "string", "enum": ["personal", "shared"]},
-					"content": {"type": "string", "description": "one short self-contained fact, phrased so it still makes sense months from now"}
+					"scope": {"type": "string", "enum": ["personal", "shared"], "description": "shared = a fact about the world/music/this server; personal = a fact about the person you are talking to"},
+					"content": {"type": "string", "description": "one short self-contained fact, phrased so it still makes sense months from now and to somebody who was not in this conversation"}
 				},
 				"required": ["scope", "content"]
 			}`),
 		}},
 		{Type: "function", Function: ToolFunction{
 			Name: "recall",
-			Description: "Search your memory by meaning for things not already in your context -- older conversations, or a detail you only half remember. " +
-				"Use it when someone refers to something you should know but can't see above. Searches only what you know about the person you're talking to, plus this server's shared memory.",
+			Description: "Search your memory by meaning for something not already in your context -- an older conversation, or a detail you only half remember. " +
+				"Searches both what you know about the person you're talking to and what this server knows generally, unless you narrow it. " +
+				"Use it whenever you are asked something factual you cannot already see: if it comes back empty, say you don't know rather than guessing.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"query": {"type": "string", "description": "what you're trying to remember, in plain words"},
-					"scope": {"type": "string", "enum": ["personal", "shared"], "description": "defaults to personal"}
+					"scope": {"type": "string", "enum": ["personal", "shared", "both"], "description": "defaults to both"}
 				},
 				"required": ["query"]
 			}`),
@@ -189,20 +202,45 @@ func dispatchMemoryTool(ctx context.Context, mem *Memory, guildID, userID int64,
 			return "", fmt.Errorf("recall: bad arguments: %w", err)
 		}
 		if args.Scope == "" {
-			args.Scope = "personal"
-		}
-		key, err := scopeKey(args.Scope, guildID, userID)
-		if err != nil {
-			return "", err
+			args.Scope = "both"
 		}
 
-		found, err := mem.Search(ctx, key, args.Query, memorySearchLimit)
-		if err != nil {
-			return "", err
+		// Both by default. A question like "what colour are the Breakaway
+		// lasers" is not about the asker at all, so searching only their own
+		// memories answers nothing and invites the model to invent the rest.
+		var keys []string
+		switch args.Scope {
+		case "personal":
+			keys = []string{UserKey(userID)}
+		case "shared":
+			keys = []string{SharedKey(guildID)}
+		case "both":
+			keys = []string{UserKey(userID), SharedKey(guildID)}
+		default:
+			return "", fmt.Errorf("recall: scope must be \"personal\", \"shared\" or \"both\", got %q", args.Scope)
 		}
-		out := make([]map[string]any, 0, len(found))
-		for _, r := range found {
-			out = append(out, map[string]any{"memory_id": r.ID, "memory": r.Memory})
+
+		out := make([]map[string]any, 0, memorySearchLimit*len(keys))
+		for _, key := range keys {
+			found, err := mem.Search(ctx, key, args.Query, memorySearchLimit)
+			if err != nil {
+				return "", err
+			}
+			scope := "shared"
+			if key == UserKey(userID) {
+				scope = "personal"
+			}
+			for _, r := range found {
+				out = append(out, map[string]any{"memory_id": r.ID, "memory": r.Memory, "scope": scope})
+			}
+		}
+		if len(out) == 0 {
+			// Said explicitly, because an empty list reads as "nothing to say"
+			// and the model fills silence with invention.
+			return marshal(map[string]any{
+				"results": out,
+				"note":    "nothing remembered about this -- say you don't know rather than guessing",
+			})
 		}
 		return marshal(map[string]any{"results": out})
 
