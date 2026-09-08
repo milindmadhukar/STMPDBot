@@ -46,6 +46,7 @@ var (
 	guildFlag    = flag.Int64("guild", 0, "only this guild (0 = all)")
 	includeLegcy = flag.Bool("include-legacy", false, "also migrate rows from the old agent_memory table")
 	concurrency  = flag.Int("concurrency", 3, "how many mem0 extraction calls to run at once")
+	skipSeeded   = flag.Bool("skip-seeded", true, "skip authors this pass has already seeded (see resume)")
 	callTimeout  = flag.Duration("call-timeout", 4*time.Minute, "how long to wait for one mem0 extraction call")
 )
 
@@ -85,6 +86,10 @@ func main() {
 	}
 
 	batches, stats := collect(ctx, env)
+
+	if *skipSeeded {
+		batches = dropSeeded(ctx, mem, batches)
+	}
 	slog.Info("Filtered the corpus",
 		slog.Int("messages_total", stats.total),
 		slog.Int("passed_filter", stats.kept),
@@ -215,6 +220,68 @@ type job struct {
 //
 // Batches for the same author are independent: mem0 reconciles overlapping
 // facts on its own, which is the property this whole design leans on.
+// dropSeeded removes authors this pass has already covered.
+//
+// It exists because the pass takes hours and gets interrupted -- a quota
+// running out, a redeploy, a laptop closing -- and without this, resuming
+// means paying for every extraction again from the top. mem0 would reconcile
+// the duplicates, so nothing would break; it would just be an hour of
+// somebody's money spent to learn what was already known.
+//
+// The record of what is done lives in mem0 itself rather than in a checkpoint
+// file, because mem0 is the thing that actually has the memories. A file can
+// disagree with reality; the store cannot. Each check is a cheap listing with
+// no extraction behind it, so this costs latency and no tokens at all.
+func dropSeeded(ctx context.Context, mem *ai.Memory, batches []authorBatch) []authorBatch {
+	var (
+		mu      sync.Mutex
+		keep    = make([]authorBatch, 0, len(batches))
+		skipped int
+		wg      sync.WaitGroup
+		sem     = make(chan struct{}, 8)
+	)
+
+	for _, b := range batches {
+		wg.Add(1)
+		go func(b authorBatch) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			records, err := mem.List(ctx, ai.UserKey(b.authorID), 100)
+			if err != nil {
+				// Err towards doing the work: a listing that failed is not
+				// evidence that the author was seeded.
+				slog.Debug("Could not check whether an author was seeded",
+					slog.Int64("author_id", b.authorID), slog.Any("err", err))
+			}
+
+			for _, r := range records {
+				if r.Metadata["source"] == "history-backfill" {
+					mu.Lock()
+					skipped++
+					mu.Unlock()
+					return
+				}
+			}
+
+			mu.Lock()
+			keep = append(keep, b)
+			mu.Unlock()
+		}(b)
+	}
+	wg.Wait()
+
+	// Restore the most-active-first order the concurrent checks scrambled, so
+	// an interrupted resume still covers the busiest people first.
+	sort.Slice(keep, func(i, j int) bool { return len(keep[i].messages) > len(keep[j].messages) })
+
+	slog.Info("Resume check",
+		slog.Int("already_seeded", skipped),
+		slog.Int("still_to_do", len(keep)))
+	return keep
+}
+
 func send(ctx context.Context, mem *ai.Memory, batches []authorBatch, calls int) {
 	progress := script.NewProgress("seed-agent-memory", calls)
 	defer progress.Done()

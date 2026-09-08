@@ -96,8 +96,15 @@ func main() {
 	}
 
 	// The nightly digest is what keeps memory current between conversations.
-	// Only started when there is somewhere to write to.
-	if memory.Enabled() {
+	// Only started when there is somewhere to write to, and when it has not
+	// been switched off -- it is the one part of this that spends on its own
+	// schedule rather than because somebody asked.
+	switch {
+	case !memory.Enabled():
+	case !cfg.Agent.DigestEnabled():
+		slog.Warn("Nightly memory digest disabled (agent.memory_digest_enabled = false); " +
+			"memory still works, it just will not learn from messages the bot was not addressed in")
+	default:
 		go runDigestLoop(ctx, pool, memory)
 	}
 

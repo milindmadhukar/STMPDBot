@@ -140,6 +140,16 @@ type AgentConfig struct {
 	// applications on the same instance use their own ("wizard", "hermes");
 	// every read and write from here is filtered to this one.
 	MemoryAgentID string `toml:"memory_agent_id"`
+	// MemoryDigestEnabled switches off the nightly pass that folds messages
+	// the bot was never addressed in into memory. A pointer so that "absent"
+	// and "false" are different: absent means on, which is what an existing
+	// deployment expects after an upgrade.
+	//
+	// It exists because that pass is the only part of this feature that
+	// spends money on its own schedule, without anybody asking it to. Bounded
+	// though it is, whoever pays for the tokens is entitled to a switch that
+	// does not also throw away memory itself.
+	MemoryDigestEnabled *bool `toml:"memory_digest_enabled"`
 }
 
 // MemoryAPIKeyEnv holds the mem0 API key when it is kept out of the TOML, for
@@ -153,6 +163,12 @@ func (a AgentConfig) ResolvedMemoryAPIKey() string {
 		return key
 	}
 	return a.MemoryAPIKey
+}
+
+// DigestEnabled reports whether the nightly memory digest should run.
+// Defaults to true when unset.
+func (a AgentConfig) DigestEnabled() bool {
+	return a.MemoryDigestEnabled == nil || *a.MemoryDigestEnabled
 }
 
 // ResolvedMemoryAgentID defaults the tenant key rather than requiring it: an

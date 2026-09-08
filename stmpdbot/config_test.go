@@ -204,3 +204,48 @@ api_key = "stale-copy-of-the-key"
 		t.Errorf("known keys were not decoded: %+v", cfg.LLM)
 	}
 }
+
+// The digest is the only part of the memory feature that spends money on its
+// own schedule, so its switch has to behave predictably -- and absent must
+// mean on, or an upgrade would silently disable it on every existing config.
+func TestAgentConfig_DigestEnabled(t *testing.T) {
+	t.Parallel()
+
+	if !(AgentConfig{}).DigestEnabled() {
+		t.Error("an unset digest switch must default to on")
+	}
+
+	on, off := true, false
+	if !(AgentConfig{MemoryDigestEnabled: &on}).DigestEnabled() {
+		t.Error("explicit true must be on")
+	}
+	if (AgentConfig{MemoryDigestEnabled: &off}).DigestEnabled() {
+		t.Error("explicit false must be off")
+	}
+}
+
+func TestLoadConfig_DigestSwitchRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		toml string
+		want bool
+	}{
+		{"absent means on", "[agent]\nmemory_url = \"http://mem0:8000\"\n", true},
+		{"false means off", "[agent]\nmemory_digest_enabled = false\n", false},
+		{"true means on", "[agent]\nmemory_digest_enabled = true\n", true},
+	} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(tc.toml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := cfg.Agent.DigestEnabled(); got != tc.want {
+			t.Errorf("%s: DigestEnabled() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

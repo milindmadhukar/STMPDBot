@@ -168,6 +168,13 @@ memory_api_key = ""
 # Defaults to "garrixbot" when empty. Must not collide with another
 # application's id on the same instance.
 memory_agent_id = "garrixbot"
+# The nightly pass that folds messages the bot was never addressed in into
+# memory. Defaults to true when absent. It is capped at 25 extraction calls a
+# night -- on a busy server that is a couple of dollars a month -- but it is
+# the only part of this feature that spends on its own schedule, so it has its
+# own switch. Turning it off leaves memory fully working; the bot just stops
+# learning from conversations it was not part of.
+memory_digest_enabled = true
 
 [storage]
 # Where rank card background images live. Read by both the bot and the
