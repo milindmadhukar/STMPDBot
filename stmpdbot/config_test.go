@@ -141,3 +141,37 @@ func TestConfigExample_MatchesTheConfigStruct(t *testing.T) {
 			"copying it gets a silently empty setting: %v", err)
 	}
 }
+
+// The agent is meant to be the only container holding the LLM API key, but
+// docker-compose mounts one config.docker.toml into the bot, the agent and
+// the dashboard alike -- so the key has to reach the agent by a route the
+// other two don't share. ResolvedAPIKey is that route.
+func TestAgentConfig_ResolvedAPIKey(t *testing.T) {
+	// No t.Parallel(): t.Setenv and parallel subtests don't mix.
+
+	t.Run("prefers the environment over the config file", func(t *testing.T) {
+		t.Setenv(AgentAPIKeyEnv, "from-env")
+
+		cfg := AgentConfig{APIKey: "from-toml"}
+		if got := cfg.ResolvedAPIKey(); got != "from-env" {
+			t.Errorf("ResolvedAPIKey() = %q, want %q", got, "from-env")
+		}
+	})
+
+	t.Run("falls back to the config file", func(t *testing.T) {
+		t.Setenv(AgentAPIKeyEnv, "")
+
+		cfg := AgentConfig{APIKey: "from-toml"}
+		if got := cfg.ResolvedAPIKey(); got != "from-toml" {
+			t.Errorf("ResolvedAPIKey() = %q, want %q", got, "from-toml")
+		}
+	})
+
+	t.Run("is empty when neither is set", func(t *testing.T) {
+		t.Setenv(AgentAPIKeyEnv, "")
+
+		if got := (AgentConfig{}).ResolvedAPIKey(); got != "" {
+			t.Errorf("ResolvedAPIKey() = %q, want empty", got)
+		}
+	})
+}

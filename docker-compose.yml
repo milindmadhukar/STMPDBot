@@ -82,6 +82,11 @@ services:
     command: -config=/var/lib/config.toml
     environment:
       - TZ=Asia/Kolkata
+      # The LLM API key, deliberately NOT in config.docker.toml: that file is
+      # mounted into the bot and dashboard containers too, so a key written
+      # there would be readable in all three. This is the only service that
+      # gets it. Set STMPD_AGENT_API_KEY in .env alongside LAVALINK_HEAP.
+      - STMPD_AGENT_API_KEY=${STMPD_AGENT_API_KEY:?set STMPD_AGENT_API_KEY in .env}
     restart: unless-stopped
     networks:
       - stmpdbot       # reached by the bot's internal HTTP call

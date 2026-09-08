@@ -8,7 +8,11 @@
 // own. It reads the same TOML config as the bot (same as cmd/dashboard) so
 // the database credentials are defined exactly once, but it is the only
 // process that ever holds the LLM API key -- the bot's own container never
-// does.
+// does. That last part is only true because the key comes from
+// STMPD_AGENT_API_KEY, set on this service alone: the config file itself is
+// mounted into all three containers, so a key written into [agent].api_key
+// would sit on the bot's and the dashboard's filesystems too. See
+// stmpdbot.AgentConfig.ResolvedAPIKey.
 //
 // It deliberately does NOT run migrations, for the same reason
 // cmd/dashboard doesn't: the bot owns the schema, and two processes racing
@@ -50,8 +54,9 @@ func main() {
 		slog.Error("agent.secret must be set -- refusing to run an unauthenticated endpoint that spends real API money")
 		os.Exit(1)
 	}
-	if cfg.Agent.BaseURL == "" || cfg.Agent.APIKey == "" {
-		slog.Error("agent.base_url and agent.api_key must be set")
+	apiKey := cfg.Agent.ResolvedAPIKey()
+	if cfg.Agent.BaseURL == "" || apiKey == "" {
+		slog.Error("agent.base_url must be set, and the API key via " + stmpdbot.AgentAPIKeyEnv + " (preferred) or agent.api_key")
 		os.Exit(1)
 	}
 
@@ -72,7 +77,7 @@ func main() {
 
 	srv := &server{
 		queries: db.New(pool),
-		client:  ai.NewClient(cfg.Agent.BaseURL, cfg.Agent.APIKey, cfg.Agent.Model, maxTokens),
+		client:  ai.NewClient(cfg.Agent.BaseURL, apiKey, cfg.Agent.Model, maxTokens),
 		secret:  cfg.Agent.Secret,
 	}
 

@@ -85,11 +85,40 @@ type AgentConfig struct {
 	// BaseURL is the OpenAI-compatible chat completions endpoint, e.g.
 	// "https://cliproxy.milind.dev/v1/".
 	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
-	Model   string `toml:"model"`
+	// APIKey is normally left EMPTY here and supplied through
+	// STMPD_AGENT_API_KEY instead -- see ResolvedAPIKey. Setting it in the
+	// TOML still works, but leaks the key into the bot and dashboard
+	// containers, which mount this same file.
+	APIKey string `toml:"api_key"`
+	Model  string `toml:"model"`
 	// MaxTokens caps the length of every completion, including the ones
 	// spent on tool-calling round-trips.
 	MaxTokens int `toml:"max_tokens"`
+}
+
+// AgentAPIKeyEnv holds the LLM API key when it is kept out of the TOML.
+const AgentAPIKeyEnv = "STMPD_AGENT_API_KEY"
+
+// ResolvedAPIKey returns the LLM API key, preferring the environment over
+// the config file.
+//
+// The whole point of splitting cmd/agent out of the bot was that it is the
+// only process that ever holds this key -- but docker-compose mounts one
+// config.docker.toml into the bot, the agent AND the dashboard, so a key
+// written in [agent].api_key sits on all three containers' filesystems and
+// the isolation is nominal. It can't simply move to its own file: the same
+// sharing is what makes the database credentials and the [llm]/[agent]
+// shared secret exist exactly once.
+//
+// So the key alone leaves the file. Compose sets STMPD_AGENT_API_KEY on the
+// agent service only, and it exists nowhere else on the box but the .env it
+// is read from. The TOML field stays supported for local runs, where one
+// process reads one file and there is nothing to leak into.
+func (a AgentConfig) ResolvedAPIKey() string {
+	if key := os.Getenv(AgentAPIKeyEnv); key != "" {
+		return key
+	}
+	return a.APIKey
 }
 
 type StorageConfig struct {

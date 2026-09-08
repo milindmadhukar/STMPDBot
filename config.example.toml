@@ -129,6 +129,11 @@ cooldown_seconds = 15
 # Read only by cmd/agent, the standalone process that holds the LLM API key
 # and runs the persona's tool-calling loop. See stmpdbot/ai for what it does
 # and how to remove it entirely.
+#
+# Under docker compose this same file is mounted into the bot and dashboard
+# containers as well -- that is what keeps the database credentials and the
+# [llm]/[agent] shared secret defined exactly once. The API key is the one
+# thing that must NOT be written here for that reason: see api_key below.
 
 # Listen address. Container-internal only -- never publish this port.
 address = ":8083"
@@ -137,6 +142,10 @@ address = ":8083"
 secret = ""
 # an OpenAI-compatible chat completions endpoint, e.g. a personal LLM proxy
 base_url = ""
+# Leave EMPTY in any deployment that shares this file between containers, and
+# set STMPD_AGENT_API_KEY on the agent service instead (compose reads it from
+# .env) -- a key written here is readable inside the bot and dashboard
+# containers too. Filling it in is fine for a local single-process run.
 api_key = ""
 model = ""
 # cap on completion length, including tool-calling round-trips
