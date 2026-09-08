@@ -25,6 +25,7 @@ var Commands = []discord.ApplicationCommandCreate{
 	version,
 	moderation,
 	config,
+	forgetme,
 }
 
 func SetupHandlers(b *stmpdbot.STMPDBot) *handler.Mux {
@@ -77,6 +78,7 @@ func SetupHandlers(b *stmpdbot.STMPDBot) *handler.Mux {
 	rootHandler.Command("/quiz", QuizHandler(b))
 	rootHandler.Command("/avatar", AvatarHandler)
 	rootHandler.Command("/ping", PingHandler)
+	rootHandler.Command("/forgetme", ForgetMeHandler(b))
 
 	// h.Command("/whois", WhoisHandler)
 

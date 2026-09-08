@@ -74,10 +74,10 @@ func Tools() []Tool {
 // Dispatch executes one tool call against the given guild's (and, for the
 // memory tools, the given user's) data and returns a JSON string suitable to
 // send back as a role "tool" message.
-func Dispatch(ctx context.Context, queries *db.Queries, guildID, userID int64, name, argsJSON string) (string, error) {
+func Dispatch(ctx context.Context, queries *db.Queries, mem *Memory, guildID, userID int64, name, argsJSON string) (string, error) {
 	switch name {
-	case "remember", "forget":
-		return dispatchMemoryTool(ctx, queries, guildID, userID, name, argsJSON)
+	case "remember", "recall", "update_memory", "forget":
+		return dispatchMemoryTool(ctx, mem, guildID, userID, name, argsJSON)
 	case "search_songs":
 		var args struct {
 			Query string `json:"query"`

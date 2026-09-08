@@ -75,9 +75,23 @@ func main() {
 		maxTokens = 4096
 	}
 
+	// Memory is a shared, self-hosted mem0 instance -- shared with the other
+	// agents on the same box, segregated from them by agent_id rather than by
+	// deployment. NewMemory returns nil when it is unconfigured, and every
+	// call site tolerates that.
+	memory := ai.NewMemory(cfg.Agent.MemoryURL, cfg.Agent.ResolvedMemoryAPIKey(), cfg.Agent.ResolvedMemoryAgentID())
+	if memory.Enabled() {
+		slog.Info("Long-term memory enabled",
+			slog.String("url", cfg.Agent.MemoryURL),
+			slog.String("agent_id", cfg.Agent.ResolvedMemoryAgentID()))
+	} else {
+		slog.Warn("Long-term memory not configured (agent.memory_url is empty); the persona will not remember anything")
+	}
+
 	srv := &server{
 		queries: db.New(pool),
 		client:  ai.NewClient(cfg.Agent.BaseURL, apiKey, cfg.Agent.Model, maxTokens),
+		memory:  memory,
 		secret:  cfg.Agent.Secret,
 	}
 

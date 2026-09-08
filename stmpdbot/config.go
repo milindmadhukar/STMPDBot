@@ -127,6 +127,42 @@ type AgentConfig struct {
 	// MaxTokens caps the length of every completion, including the ones
 	// spent on tool-calling round-trips.
 	MaxTokens int `toml:"max_tokens"`
+
+	// Memory is the persona's long-term memory, held in a shared self-hosted
+	// mem0 instance rather than this bot's own database. Empty MemoryURL
+	// leaves the feature off and the agent simply has no memory, the same way
+	// an unset AgentURL leaves the whole persona off.
+	MemoryURL string `toml:"memory_url"`
+	// MemoryAPIKey follows APIKey: normally empty here and supplied through
+	// STMPD_MEM0_API_KEY, because this file is mounted into three containers.
+	MemoryAPIKey string `toml:"memory_api_key"`
+	// MemoryAgentID is the tenant key inside the shared mem0 instance. Other
+	// applications on the same instance use their own ("wizard", "hermes");
+	// every read and write from here is filtered to this one.
+	MemoryAgentID string `toml:"memory_agent_id"`
+}
+
+// MemoryAPIKeyEnv holds the mem0 API key when it is kept out of the TOML, for
+// the same reason AgentAPIKeyEnv exists.
+const MemoryAPIKeyEnv = "STMPD_MEM0_API_KEY"
+
+// ResolvedMemoryAPIKey prefers the environment over the config file. See
+// ResolvedAPIKey for why the key does not live in the shared TOML.
+func (a AgentConfig) ResolvedMemoryAPIKey() string {
+	if key := os.Getenv(MemoryAPIKeyEnv); key != "" {
+		return key
+	}
+	return a.MemoryAPIKey
+}
+
+// ResolvedMemoryAgentID defaults the tenant key rather than requiring it: an
+// empty agent_id would write memories into the shared instance's unfiltered
+// space, where another application would read them.
+func (a AgentConfig) ResolvedMemoryAgentID() string {
+	if a.MemoryAgentID != "" {
+		return a.MemoryAgentID
+	}
+	return "garrixbot"
 }
 
 // AgentAPIKeyEnv holds the LLM API key when it is kept out of the TOML.

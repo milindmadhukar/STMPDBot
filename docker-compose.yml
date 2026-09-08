@@ -87,10 +87,19 @@ services:
       # there would be readable in all three. This is the only service that
       # gets it. Set STMPD_AGENT_API_KEY in .env alongside LAVALINK_HEAP.
       - STMPD_AGENT_API_KEY=${STMPD_AGENT_API_KEY:?set STMPD_AGENT_API_KEY in .env}
+      # mem0 API key, kept out of config.docker.toml for exactly the same
+      # reason as the one above. Minted in mem0 with the label "garrixbot" so
+      # it is revocable without touching the other applications' keys.
+      - STMPD_MEM0_API_KEY=${STMPD_MEM0_API_KEY:?set STMPD_MEM0_API_KEY in .env}
     restart: unless-stopped
     networks:
       - stmpdbot       # reached by the bot's internal HTTP call
       - db             # reaches postgres
+      # Shared memory network, created outside this file with
+      # `docker network create mem0`. Reaches the mem0 API as
+      # http://mem0:8000. Other applications (hermes, wizard) share that
+      # instance; agent_id keeps their memories and ours apart.
+      - mem0
     # No `ports:` on purpose -- reachable only from the bot, over the
     # internal stmpdbot network, same as the bot's own internal API.
     expose:
@@ -145,6 +154,10 @@ networks:
   stmpdbot:
     name: stmpdbot
   db:
+    external: true
+  # Shared memory network. Created outside this file, and joined by every
+  # application on the box that reads or writes memories.
+  mem0:
     external: true
   reverse_proxy:
     external: true

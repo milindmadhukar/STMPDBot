@@ -77,6 +77,44 @@ type agentRespondResponse struct {
 // only the reconstructed conversation -- no system prompt: the agent service
 // owns its own identity, persona and memory, and assembles all of that
 // itself.
+// Forget erases everything the persona remembers about one person. It is the
+// bot's half of /forgetme: the agent service holds the memory credentials, so
+// the purge is asked for rather than performed here.
+func (c *AgentClient) Forget(ctx context.Context, userID int64) (int, error) {
+	body, err := json.Marshal(map[string]any{"user_id": userID})
+	if err != nil {
+		return 0, fmt.Errorf("agentclient: failed to encode request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/forget", bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("agentclient: failed to build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Token", c.secret)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("agentclient: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Deleted int    `json:"deleted"`
+		Error   string `json:"error,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("agentclient: failed to decode response (status %d): %w", resp.StatusCode, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if out.Error != "" {
+			return out.Deleted, fmt.Errorf("agentclient: %s", out.Error)
+		}
+		return out.Deleted, fmt.Errorf("agentclient: request failed with status %d", resp.StatusCode)
+	}
+	return out.Deleted, nil
+}
+
 func (c *AgentClient) Respond(ctx context.Context, guildID, userID int64, messages []AgentMessage) (string, error) {
 	body, err := json.Marshal(agentRespondRequest{GuildID: guildID, UserID: userID, Messages: messages})
 	if err != nil {

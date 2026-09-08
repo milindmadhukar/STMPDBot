@@ -151,6 +151,24 @@ model = ""
 # cap on completion length, including tool-calling round-trips
 max_tokens = 4096
 
+# Long-term memory, held in a self-hosted mem0 instance shared with whatever
+# else on the box stores memories. Leave memory_url empty to run without
+# memory at all -- the persona then works exactly as it did before, it just
+# does not remember anyone between conversations.
+#
+# Under docker compose this is http://mem0:8000, reached over the shared
+# `mem0` network. Segregation from the other applications on that instance is
+# by memory_agent_id, which is stamped on every memory written and filtered on
+# every read -- one store, many tenants, no crosstalk.
+memory_url = ""
+# Same rule as api_key above: leave EMPTY in a deployment that shares this
+# file between containers and set STMPD_MEM0_API_KEY on the agent service
+# instead. Minted from mem0 with a label, so it can be revoked on its own.
+memory_api_key = ""
+# Defaults to "garrixbot" when empty. Must not collide with another
+# application's id on the same instance.
+memory_agent_id = "garrixbot"
+
 [storage]
 # Where rank card background images live. Read by both the bot and the
 # dashboard. Empty defaults to "assets/backgrounds" -- the images baked into

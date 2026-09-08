@@ -24,7 +24,7 @@ const maxToolRounds = 8
 // SystemPrompt() plus LoadMemoryContext's output -- followed by the
 // reconstructed conversation and the triggering message. userID is who
 // triggered this conversation; it scopes the remember/forget tools.
-func (c *Client) Respond(ctx context.Context, queries *db.Queries, guildID, userID int64, history []Message) (string, error) {
+func (c *Client) Respond(ctx context.Context, queries *db.Queries, mem *Memory, guildID, userID int64, history []Message) (string, error) {
 	messages := append([]Message(nil), history...)
 
 	for round := 0; round <= maxToolRounds; round++ {
@@ -46,7 +46,7 @@ func (c *Client) Respond(ctx context.Context, queries *db.Queries, guildID, user
 
 		messages = append(messages, reply)
 		for _, call := range reply.ToolCalls {
-			result, err := Dispatch(ctx, queries, guildID, userID, call.Function.Name, call.Function.Arguments)
+			result, err := Dispatch(ctx, queries, mem, guildID, userID, call.Function.Name, call.Function.Arguments)
 			if err != nil {
 				slog.Warn("ai: tool call failed",
 					slog.String("tool", call.Function.Name), slog.Any("err", err))
