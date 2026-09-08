@@ -11,13 +11,22 @@
 // links to, and no fuzzy matching is involved. Rows with no Apple link cannot be
 // resolved this way and are reported, not guessed at.
 //
+// Under -recheck it does the opposite job and writes nothing: instead of the rows with
+// no date it walks the rows that have one, and reports where the stored date disagrees
+// with the recording the row links to. A missing date is obvious; a wrong one is not,
+// and the wrong ones are the ones members notice.
+//
 // Idempotent, and never announces: this binary does not import the notifier.
 package main
 
 import (
 	"context"
+	"flag"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	db "github.com/milindmadhukar/STMPDBot/db/sqlc"
 	"github.com/milindmadhukar/STMPDBot/scripts/internal/script"
@@ -25,8 +34,17 @@ import (
 )
 
 func main() {
+	// Declared before Setup, which is what calls flag.Parse.
+	recheck := flag.Bool("recheck", false,
+		"audit the dates that already exist against Apple and report disagreements; writes nothing")
+
 	env, ctx, cleanup := script.Setup("backfill-dates")
 	defer cleanup()
+
+	if *recheck {
+		recheckDates(ctx, env)
+		return
+	}
 
 	rows, err := env.Queries.GetSongsWithPlaceholderDate(ctx)
 	if err != nil {
@@ -221,4 +239,153 @@ func source(bySearch bool) string {
 		return "search (verified)"
 	}
 	return "stored apple id"
+}
+
+// recheckGapDays is how far a stored date may sit from Apple's before it is worth a
+// person's attention.
+//
+// Not zero, and not one: beatport publishes a track the day a label delivers it and
+// Apple lists the day it goes on sale, so a day or two of disagreement is the normal
+// state of an honest row and reporting it would bury the real defects. A month apart
+// is not a rounding difference -- it is two different events.
+const recheckGapDays = 30
+
+// dateDisagreement is one row whose stored date does not match the recording it links to.
+type dateDisagreement struct {
+	row      db.GetSongsWithACheckableDateRow
+	appleDay string
+	gapDays  int
+	// linkedTitle is what Apple calls the recording this row points at. When it is
+	// not this song, the defect is the stored link, and the date is only its symptom.
+	linkedTitle string
+	release     string
+	titleAgrees bool
+}
+
+// recheckDates walks every row that has both a date and an Apple link and reports the
+// ones where the two disagree. It writes nothing, deliberately.
+//
+// Correcting these is a person's job and not a pass's. Apple's date belongs to
+// whichever release the row happens to link to, so a remix row pointed at the
+// original single, or a track pointed at the compilation it was later collected on,
+// disagrees for a reason that is not "the stored date is wrong" -- and rewriting
+// those automatically would replace a handful of wrong dates with a hundred. What the
+// pass can do honestly is find the disagreements and put the evidence next to each
+// one.
+func recheckDates(ctx context.Context, env *script.Env) {
+	rows, err := env.Queries.GetSongsWithACheckableDate(ctx)
+	if err != nil {
+		script.Fatal("failed to load songs with a checkable date", err)
+	}
+	slog.Info("Rows with a date to check", slog.Int("count", len(rows)))
+
+	client := utils.NewItunesClient()
+	var agreed, playlist, notFound, failed int
+	var found []dateDisagreement
+
+	prog := script.NewProgress("recheck dates", len(rows))
+	for _, row := range rows {
+		prog.Step()
+
+		if utils.IsApplePlaylistURL(row.AppleMusicUrl.String) {
+			playlist++
+			continue
+		}
+		id := utils.AppleIDFromURL(row.AppleMusicUrl.String)
+		if id == "" {
+			notFound++
+			continue
+		}
+
+		result, err := client.Lookup(ctx, id)
+		if err != nil {
+			slog.Error("lookup failed",
+				slog.Int64("song_id", row.ID), slog.String("apple_id", id), slog.Any("err", err))
+			failed++
+			continue
+		}
+		if result == nil || result.Date() == "" {
+			notFound++
+			continue
+		}
+
+		gap, ok := daysApart(row.ReleaseDate.String, result.Date())
+		if !ok {
+			notFound++
+			continue
+		}
+		if gap <= recheckGapDays {
+			agreed++
+			continue
+		}
+
+		found = append(found, dateDisagreement{
+			row:         row,
+			appleDay:    result.Date(),
+			gapDays:     gap,
+			linkedTitle: result.ArtistName + " - " + result.Title(),
+			release:     result.CollectionTitle(),
+			titleAgrees: titlesAgree(row.Name, result.Title()),
+		})
+	}
+	prog.Done()
+
+	// Widest disagreement first: a row that is years out is a different kind of
+	// problem from one that is a season out, and it is the one to read first.
+	sort.Slice(found, func(i, j int) bool { return found[i].gapDays > found[j].gapDays })
+
+	badLinks := 0
+	for _, d := range found {
+		mix := ""
+		if d.row.MixName.String != "" {
+			mix = " (" + d.row.MixName.String + ")"
+		}
+		if !d.titleAgrees {
+			badLinks++
+		}
+		slog.Warn("stored date disagrees with the linked recording",
+			slog.Int64("song_id", d.row.ID),
+			slog.String("song", d.row.Artists+" - "+d.row.Name+mix),
+			slog.String("stored", d.row.ReleaseDate.String),
+			slog.String("apple", d.appleDay),
+			slog.Int("gap_days", d.gapDays),
+			slog.String("apple_calls_it", d.linkedTitle),
+			slog.String("on_release", d.release),
+			slog.Bool("link_is_this_song", d.titleAgrees))
+	}
+
+	slog.Info("Date recheck complete",
+		slog.Int("checked", len(rows)),
+		slog.Int("agreed", agreed),
+		slog.Int("disagreed", len(found)),
+		slog.Int("of_those_linked_to_another_recording", badLinks),
+		slog.Int("apple_link_is_a_playlist", playlist),
+		slog.Int("apple_had_no_date", notFound),
+		slog.Int("failed", failed),
+		slog.String("threshold", "more than "+strconv.Itoa(recheckGapDays)+" days apart"))
+
+	if len(found) == 0 {
+		slog.Info("Every checkable date agrees with the recording it links to")
+		return
+	}
+	slog.Info("Nothing was written. Correct a date on the song's dashboard page, " +
+		"which locks the column so no pass overwrites it, and re-run to confirm.")
+}
+
+// daysApart is the absolute distance in days between two ISO days, or false when
+// either is not one.
+func daysApart(a, b string) (int, bool) {
+	first, err := time.Parse(time.DateOnly, a)
+	if err != nil {
+		return 0, false
+	}
+	second, err := time.Parse(time.DateOnly, b)
+	if err != nil {
+		return 0, false
+	}
+	days := int(first.Sub(second).Hours() / 24)
+	if days < 0 {
+		days = -days
+	}
+	return days, true
 }

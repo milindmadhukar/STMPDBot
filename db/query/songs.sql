@@ -298,6 +298,16 @@ SELECT EXISTS(SELECT 1 FROM songs WHERE beatport_id = $1);
 -- beatport_updated is deliberately unguarded -- it is the fetcher's own "already
 -- enriched" sentinel, and locking it would stall the fetcher rather than protect
 -- anything a person typed.
+--
+-- release_date is the one column here that may only ever move *earlier*. What beatport
+-- reports is publish_date -- when the track appeared on beatport, not when the record
+-- came out -- and the two diverge whenever a label re-delivers its back catalogue: the
+-- 2012 Martin Garrix remix of "Midnight Sun 2.0" carries beatport track id 27274826 and
+-- a publish date of 2021-09-06, and so did four rows in this table until someone in the
+-- server pointed out that the bot was announcing a 2012 record as a 2021 one. Taking the
+-- earlier of the two dates keeps a re-delivery from overwriting a date another source
+-- got right, and still lets beatport fill in a date the row does not have. Correcting a
+-- date that is wrongly *early* is a person's job through the dashboard, which locks it.
 UPDATE songs SET
     name          = CASE WHEN 'name' = ANY(locked_fields) THEN name ELSE sqlc.arg(name) END,
     artists       = CASE WHEN 'artists' = ANY(locked_fields) THEN artists ELSE sqlc.arg(artists) END,
@@ -306,7 +316,13 @@ UPDATE songs SET
     beatport_id   = sqlc.narg(beatport_id),
     beatport_slug = COALESCE(sqlc.narg(beatport_slug), beatport_slug),
     mix_name      = CASE WHEN 'mix_name' = ANY(locked_fields) THEN mix_name ELSE sqlc.narg(mix_name) END,
-    release_date  = CASE WHEN 'release_date' = ANY(locked_fields) THEN release_date ELSE sqlc.arg(release_date) END,
+    -- LEAST ignores NULLs, so this reads as "the earlier of the two, or whichever one
+    -- exists". The NULLIFs keep the placeholders out of that comparison: '1970-01-01'
+    -- is the old importer's "no date", and it would win every race it entered.
+    release_date  = CASE WHEN 'release_date' = ANY(locked_fields) THEN release_date
+                         ELSE COALESCE(LEAST(NULLIF(release_date, '1970-01-01'),
+                                             NULLIF(sqlc.narg(release_date)::text, '')),
+                                       release_date) END,
     release_name  = CASE WHEN 'release_name' = ANY(locked_fields) THEN release_name ELSE sqlc.narg(release_name) END,
     genre         = CASE WHEN 'genre' = ANY(locked_fields) THEN genre ELSE sqlc.narg(genre) END,
     sub_genre     = CASE WHEN 'sub_genre' = ANY(locked_fields) THEN sub_genre ELSE sqlc.narg(sub_genre) END,
@@ -322,7 +338,10 @@ WHERE id = sqlc.arg(id)
     OR beatport_id   IS DISTINCT FROM sqlc.narg(beatport_id)
     OR beatport_slug IS DISTINCT FROM COALESCE(sqlc.narg(beatport_slug), beatport_slug)
     OR (NOT ('mix_name' = ANY(locked_fields))      AND mix_name      IS DISTINCT FROM sqlc.narg(mix_name))
-    OR (NOT ('release_date' = ANY(locked_fields))  AND release_date  IS DISTINCT FROM sqlc.arg(release_date))
+    OR (NOT ('release_date' = ANY(locked_fields))
+        AND release_date IS DISTINCT FROM COALESCE(LEAST(NULLIF(release_date, '1970-01-01'),
+                                                         NULLIF(sqlc.narg(release_date)::text, '')),
+                                                   release_date))
     OR (NOT ('release_name' = ANY(locked_fields))  AND release_name  IS DISTINCT FROM sqlc.narg(release_name))
     OR (NOT ('genre' = ANY(locked_fields))         AND genre         IS DISTINCT FROM sqlc.narg(genre))
     OR (NOT ('sub_genre' = ANY(locked_fields))     AND sub_genre     IS DISTINCT FROM sqlc.narg(sub_genre))
@@ -548,6 +567,25 @@ WHERE s.id = $1 AND t.parent_song_id = s.id AND t.lyrics IS NULL
 SELECT id, name, artists, release_date, apple_music_url, spotify_url
 FROM songs WHERE release_date = '1970-01-01' OR release_date LIKE '%-01-01'
 ORDER BY (apple_music_url IS NULL), id;
+
+-- name: GetSongsWithACheckableDate :many
+-- Every row whose stored date can be checked against the recording it links to.
+--
+-- The placeholder query above asks "which rows have no date"; this one asks "which
+-- rows have a date that might be the wrong one", which turned out to be the more
+-- expensive question. A date can be a real date, in range, and still describe the
+-- wrong event -- beatport's publish_date on a re-delivered back catalogue is a real
+-- date, and it is how a 2012 remix came to be announced as a 2021 release.
+--
+-- Locked rows are excluded: a person has already ruled on those, and re-reporting
+-- them every run is how a report stops being read.
+SELECT id, name, artists, mix_name, release_date, apple_music_url
+FROM songs
+WHERE release_date IS NOT NULL
+  AND release_date <> '1970-01-01'
+  AND COALESCE(apple_music_url, '') <> ''
+  AND NOT ('release_date' = ANY(locked_fields))
+ORDER BY id;
 
 -- name: SetSongReleaseDate :execrows
 UPDATE songs SET release_date = $2

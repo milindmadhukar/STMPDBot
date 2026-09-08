@@ -150,6 +150,42 @@ Apple link pointing at a *playlist* rather than a release (a data problem worth
 fixing — those buttons send users to the wrong place), and a link Apple no longer
 has a record for.
 
+#### `-recheck`
+
+The other half of the job, and the half that writes nothing. `-recheck` ignores the
+placeholders and walks the rows that *do* have a date, comparing each against the
+recording it links to, and reports the ones more than 30 days apart.
+
+A missing date announces itself. A wrong one does not — it is a real date, in range,
+and describes the wrong event. Beatport reports `publish_date`, the day a track
+appeared on beatport, so a label re-delivering its back catalogue hands us a date
+years after the record came out: Roy Gates' 2012 "Midnight Sun 2.0 (Martin Garrix
+Remix)" was stored, and announced in the server, as a 2021 release. Twenty rows were
+wrong that way before anyone looked, and every one of them had been sitting in front
+of members on a track card.
+
+`UpdateSongWithBeatportData` no longer lets that happen — the enrichment may only
+move a `release_date` *earlier* now, so a re-delivery cannot age a record forward.
+This pass is what finds the ones that were already wrong, and anything a future
+source gets wrong in the other direction.
+
+It reports rather than corrects because Apple's date belongs to whichever release the
+row happens to link to. A remix row pointed at the original single, or a track pointed
+at the compilation it was later collected on, disagrees for a reason that is not "the
+stored date is wrong", and rewriting those automatically would replace a handful of
+wrong dates with a hundred. Each finding therefore carries what Apple calls the
+linked recording and which release it sits on, plus `link_is_this_song=false` when the
+row's Apple link points at a different recording entirely — that is a broken link
+being reported, and the date is only its symptom.
+
+Correct a date on the song's dashboard page rather than in SQL: that locks
+`release_date`, which both keeps every pass off it and takes the row out of this
+report on the next run.
+
+- **Requires:** nothing beyond the base schema
+- **Idempotent:** trivially — it writes nothing
+- **Writes:** nothing
+
 ### `dedupe-songs`
 
 Folds together rows that represent the same recording, identified by an exact

@@ -364,6 +364,61 @@ func TestUpdateSongWithBeatportData(t *testing.T) {
 	}
 }
 
+// A beatport re-delivery must not age a record forward. Beatport reports publish_date
+// -- the day the track appeared on beatport -- so a label re-uploading its back
+// catalogue hands us a date years after the record came out, and taking it verbatim is
+// how a 2012 remix came to be announced in Discord as a 2021 release.
+func TestUpdateSongWithBeatportData_KeepsTheEarlierReleaseDate(t *testing.T) {
+	t.Parallel()
+
+	q := queries(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		desc     string
+		stored   pgtype.Text
+		incoming pgtype.Text
+		want     pgtype.Text
+	}{
+		{"a re-delivery is ignored", text("2012-10-08"), text("2021-09-06"), text("2012-10-08")},
+		{"an earlier date corrects the row", text("2021-09-06"), text("2012-10-08"), text("2012-10-08")},
+		{"a date fills an empty column", pgtype.Text{}, text("2014-08-25"), text("2014-08-25")},
+		{"the epoch placeholder loses to a real date", text("1970-01-01"), text("2013-06-17"), text("2013-06-17")},
+		{"no incoming date leaves the row alone", text("2015-07-01"), pgtype.Text{}, text("2015-07-01")},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			name := testSongName(t, "Re-delivered")
+			song, err := q.InsertRelease(ctx, db.InsertReleaseParams{
+				Name: name, Artists: "Roy Gates", ReleaseDate: tc.stored,
+			})
+			if err != nil {
+				t.Fatalf("InsertRelease failed: %v", err)
+			}
+			t.Cleanup(func() { deleteSong(t, song.ID) })
+
+			if _, err := q.UpdateSongWithBeatportData(ctx, db.UpdateSongWithBeatportDataParams{
+				ID:          song.ID,
+				Name:        name,
+				Artists:     "Roy Gates",
+				BeatportID:  int4(beatportID()),
+				ReleaseDate: tc.incoming,
+			}); err != nil {
+				t.Fatalf("UpdateSongWithBeatportData failed: %v", err)
+			}
+
+			got, err := q.GetSongByID(ctx, song.ID)
+			if err != nil {
+				t.Fatalf("GetSongByID failed: %v", err)
+			}
+			if got.ReleaseDate != tc.want {
+				t.Errorf("release_date = %+v, want %+v", got.ReleaseDate, tc.want)
+			}
+		})
+	}
+}
+
 func TestMarkBeatportUpdated(t *testing.T) {
 	t.Parallel()
 
