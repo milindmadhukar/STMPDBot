@@ -1,26 +1,59 @@
 package stmpdbot
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/pelletier/go-toml/v2"
 )
 
 func LoadConfig(path string) (*Config, error) {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open config: %w", err)
 	}
-	defer file.Close()
 
 	var cfg Config
-	if err = toml.NewDecoder(file).Decode(&cfg); err != nil {
+	if err = toml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	warnUnknownKeys(data)
 	return &cfg, nil
+}
+
+// warnUnknownKeys logs every key in the file that no field of Config claims.
+// They are ignored either way -- this only makes the ignoring audible.
+//
+// It is a warning and not an error on purpose: a config that has drifted
+// ahead of the binary must still boot, which is the whole reason one file is
+// shared between the bot, the dashboard and the agent.
+//
+// Worth having because the failure is otherwise completely silent, and has
+// bitten twice. Once when a struct tag said "youtube_api_key" while every
+// config wrote "yt_api_key" (see the test in config_test.go). Once when
+// splitting the AI feature into cmd/agent moved base_url/api_key/model out of
+// [llm] into [agent] and the deployed config kept its copies -- so the LLM API
+// key sat in a section the bot reads, in a file the bot and dashboard
+// containers both mount, for as long as nobody looked.
+func warnUnknownKeys(data []byte) {
+	dec := toml.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+
+	var probe Config
+	var strictErr *toml.StrictMissingError
+	if err := dec.Decode(&probe); errors.As(err, &strictErr) {
+		for _, e := range strictErr.Errors {
+			// The key only -- never the value, which is how half of these
+			// end up being secrets.
+			slog.Warn("Config key is not read by anything and will be ignored",
+				slog.String("key", strings.Join(e.Key(), ".")))
+		}
+	}
 }
 
 type Config struct {

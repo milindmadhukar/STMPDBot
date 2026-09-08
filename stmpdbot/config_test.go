@@ -175,3 +175,32 @@ func TestAgentConfig_ResolvedAPIKey(t *testing.T) {
 		}
 	})
 }
+
+// The pre-split [llm] section kept base_url/api_key/model after those fields
+// moved to [agent], and go-toml dropped them without a word -- so a stale copy
+// of the LLM API key lived in a section the bot reads. Unknown keys still must
+// not stop the config loading; they just have to be audible.
+func TestLoadConfig_IgnoresUnknownKeysWithoutFailing(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[bot]
+token = "abc123"
+
+[llm]
+enabled = true
+agent_url = "http://agent:8083"
+api_key = "stale-copy-of-the-key"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() returned %v; an unknown key must not stop the config loading", err)
+	}
+	if !cfg.LLM.Enabled || cfg.LLM.AgentURL != "http://agent:8083" {
+		t.Errorf("known keys were not decoded: %+v", cfg.LLM)
+	}
+}
