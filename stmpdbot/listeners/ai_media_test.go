@@ -166,6 +166,14 @@ func TestKeepTypingRefreshesUntilStopped(t *testing.T) {
 			case <-done:
 				return
 			case <-ticker.C:
+				// Mirrors keepTyping: a select whose cases are both ready picks
+				// at random, so the stop has to be re-checked before sending or
+				// one more indicator goes out after it.
+				select {
+				case <-done:
+					return
+				default:
+				}
 				send()
 			}
 		}

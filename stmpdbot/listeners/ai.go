@@ -151,6 +151,17 @@ func keepTyping(ctx context.Context, b *stmpdbot.STMPDBot, channelID snowflake.I
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// Re-checked before sending, because a select with several
+				// ready cases picks one at RANDOM: a tick landing in the same
+				// instant as the stop has an even chance of winning, and the
+				// indicator goes up once more after the reply is already sent.
+				select {
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				default:
+				}
 				send()
 			}
 		}
