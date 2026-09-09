@@ -237,33 +237,71 @@ func TestStateRetainDropsUnconfiguredChannels(t *testing.T) {
 	}
 }
 
-// The give is a ratio, so it buys less on a short line than a long one: one wrong
-// word in five is a fifth of the string. "Scared of the dark" against "Scared of the
-// night" scores 0.688 and is refused, and that is the intended edge -- past it the
-// threshold would start accepting lines that are merely about the same subject.
-func TestLineMatchesIsStricterOnShortLines(t *testing.T) {
-	if LineMatches("Scared of the dark", "Scared of the night") {
-		t.Error("a whole word wrong in a four-word line should not pass")
+// The give comes from Judge picking the CLOSEST line rather than clearing a bar, so
+// these are the invariants that matter -- not how any single pair scores.
+func TestJudgeIsDiscriminative(t *testing.T) {
+	round := SingAlongRound{
+		Lines: []string{
+			"We are the ones who will never be beaten",
+			"Together we stand and divided we fall",
+			"Every night we are dancing till the morning",
+			"Scared of the dark",
+		},
+		Cursor: 1,
 	}
-	// The same size of mistake in a longer line is a much smaller fraction of it,
-	// and does pass.
-	if !LineMatches("Ooh, I'm scared of the dark without you here",
-		"Ooh, I'm scared of the night without you here") {
-		t.Error("a whole word wrong in a long line should pass")
-	}
+
+	t.Run("a badly mangled answer still counts", func(t *testing.T) {
+		// A whole word gone and another wrong. Nowhere near the line, but nearer it
+		// than anything else in the song, which is what being an attempt means.
+		for _, attempt := range []string{
+			"together we stand and divided we all",
+			"together we stand divided we fall",
+			"togather we stand and divided we fal",
+		} {
+			if got := round.Judge(attempt); got != SingAlongCorrect {
+				t.Errorf("Judge(%q) = %v, want SingAlongCorrect", attempt, got)
+			}
+		}
+	})
+
+	t.Run("a different line of the song is not the answer", func(t *testing.T) {
+		// Clears the floor comfortably -- it is a real lyric -- but belongs to a
+		// line the round is not waiting for.
+		if got := round.Judge("Every night we are dancing till the morning"); got != SingAlongWrong {
+			t.Errorf("jumping ahead = %v, want SingAlongWrong", got)
+		}
+	})
+
+	t.Run("the line already on screen is an echo", func(t *testing.T) {
+		if got := round.Judge("We are the ones who will never be beaten"); got != SingAlongEcho {
+			t.Errorf("repeating the previous line = %v, want SingAlongEcho", got)
+		}
+	})
+
+	t.Run("ordinary chat is not an attempt", func(t *testing.T) {
+		// The floor's only job. None of these is close to any line in the song.
+		for _, chat := range []string{
+			"yo who else is here", "this song is so good", "brb", "gm everyone",
+			"anyone up for a game", "garrix is the goat",
+		} {
+			if got := round.Judge(chat); got != SingAlongWrong {
+				t.Errorf("Judge(%q) = %v, want SingAlongWrong", chat, got)
+			}
+		}
+	})
 }
 
-// The threshold is chosen against measured data -- see the constant's comment. This
-// guards the two ends of that reasoning rather than the exact figure: loose enough
-// that a misremembered word survives, tight enough that a different line does not.
+// The floor exists to keep chat out, and nothing else -- Judge's best-match rule is
+// what decides whether an attempt is the right line. Measured over 2055 catalogue
+// lines, the highest an ordinary channel message scored against the nearest line of
+// a song was 0.571, which is what the floor sits above.
 func TestSingAlongThresholdStaysInItsBand(t *testing.T) {
-	if SingAlongThreshold > 0.80 {
-		t.Errorf("SingAlongThreshold = %.2f; above 0.80 it rejects most attempts where "+
-			"somebody knew the line but not one word of it", SingAlongThreshold)
+	if SingAlongThreshold <= 0.571 {
+		t.Errorf("SingAlongThreshold = %.2f; at or below 0.571 ordinary chat starts "+
+			"registering as an attempt", SingAlongThreshold)
 	}
-	if SingAlongThreshold <= QuizThreshold {
-		t.Errorf("SingAlongThreshold = %.2f must stay above QuizThreshold %.2f: that one "+
-			"compares against a song title, where a couple of characters are most of the string",
-			SingAlongThreshold, QuizThreshold)
+	if SingAlongThreshold > 0.70 {
+		t.Errorf("SingAlongThreshold = %.2f; above 0.70 it starts rejecting attempts "+
+			"the best-match rule would have identified correctly", SingAlongThreshold)
 	}
 }

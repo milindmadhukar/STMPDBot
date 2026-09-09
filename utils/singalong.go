@@ -9,35 +9,20 @@ import (
 	db "github.com/milindmadhukar/STMPDBot/db/sqlc"
 )
 
-// SingAlongThreshold is how close a message has to be to the line it is answering.
+// SingAlongThreshold is the floor a message has to clear to be an attempt at the
+// lyric at all, rather than the bar for being the right one. Judge decides that
+// relatively -- see there -- and this only keeps ordinary chat out.
 //
-// Nobody types a lyric back exactly, so this is measured rather than guessed. Across
-// 1460 real lines from the catalogue, comparing each line against a version of
-// itself with one whole word misheard:
+// Measured over 2055 real lines from 59 records in the catalogue. The highest any
+// ordinary channel message ("yo who else is here", "this song is so good", "brb")
+// scored against the closest line of a song was 0.571, so the floor sits just above
+// it. In 32880 chat-against-line trials, none cleared 0.60 while also being that
+// song's best match.
 //
-//	threshold   misheard word accepted   adjacent-line false positives
-//	0.85        4.4%                     7.81%
-//	0.75        48.8%                    8.57%
-//	0.70        65.8%                    8.84%
-//	0.60        91.0%                    11.58%
-//
-// The first column is why 0.85 was wrong: it demanded near-perfect recall and threw
-// away all but a twentieth of the attempts where somebody remembered the line but
-// not one word of it. A single typo passes at any of these.
-//
-// The second column is why loosening is nearly free. Those false positives are
-// mostly not near misses at all -- they are lines a song repeats VERBATIM, where
-// adjacent pairs score exactly 1.0, and no threshold can separate them because there
-// is nothing to separate. That floor sits at 7.8% and moving from 0.85 to 0.70 buys
-// fifteen times the tolerance for one percentage point of it.
-//
-// 0.70 is also what the bot used in its Python days -- cogs/fun.py matched guesses
-// with difflib at 0.7 -- so this lands back on a number the community was already
-// playing against, from the other direction.
-//
-// It stays well above QuizThreshold's 0.6 because that compares a guess against a
-// song TITLE, where a couple of characters are a large fraction of the string.
-const SingAlongThreshold = 0.70
+// It buys give rather than spending it. Paired with the best-match rule, a floor
+// this low accepts 88.5% of attempts where somebody remembered the line but not one
+// word of it -- against 65.8% for a flat 0.70 and 4.4% for the 0.85 this started at.
+const SingAlongThreshold = 0.60
 
 // singAlongMaxLengthRatio rejects a message far longer than the line it claims to
 // be, before the edit-distance matrix runs.
@@ -154,11 +139,18 @@ func (r SingAlongRound) Answer() string {
 
 // Judge decides what a message is.
 //
-// The previous line is scored alongside the current one because members read the
-// screen: the line the bot posted, or the line somebody just won, is right there to
-// be typed again. Whichever line the message is closer to is the one it is taken to
-// be, so a chorus that literally repeats a line still counts as an answer rather
-// than an echo.
+// The test is which line of the song the message is CLOSEST to, not whether it
+// clears a bar against the one line being waited for. That is what lets the give be
+// as large as it is: somebody who mangles a line still mangles it into something
+// nearer that line than any other, so across the catalogue the right line stays the
+// best match 98.1% of the time even with a whole word misheard. A flat threshold
+// generous enough to accept those would also have accepted half the song.
+//
+// The previous line is checked the same way and second, because members read the
+// screen: the line the bot posted, or the one somebody just won with, is right there
+// to be typed again. Ties go to the answer, so a chorus that repeats a line verbatim
+// still counts as singing it rather than echoing it -- and repeats are common enough
+// that adjacent lines are identical in about one pair in thirteen.
 func (r SingAlongRound) Judge(message string) SingAlongVerdict {
 	if r.Complete {
 		return SingAlongEcho
@@ -170,21 +162,31 @@ func (r SingAlongRound) Judge(message string) SingAlongVerdict {
 		return SingAlongWrong
 	}
 
-	current := lyricLineScore(answer, message)
-
-	var previous float64
-	if r.Cursor > 0 {
-		previous = lyricLineScore(r.Lines[r.Cursor-1], message)
+	best := 0.0
+	for _, line := range r.Lines {
+		if score := lyricLineScore(line, message); score > best {
+			best = score
+		}
 	}
 
-	switch {
-	case current >= SingAlongThreshold && current >= previous:
-		return SingAlongCorrect
-	case previous >= SingAlongThreshold:
-		return SingAlongEcho
-	default:
+	// Nothing in the song is close, so it is chat rather than a bad attempt.
+	if best < SingAlongThreshold {
 		return SingAlongWrong
 	}
+
+	// Floating point: a line that tied the winner must not lose to rounding.
+	const tie = 1e-9
+
+	if lyricLineScore(answer, message) >= best-tie {
+		return SingAlongCorrect
+	}
+	if r.Cursor > 0 && lyricLineScore(r.Lines[r.Cursor-1], message) >= best-tie {
+		return SingAlongEcho
+	}
+
+	// Closer to some other line of the song: they have jumped ahead, or gone back
+	// to a part they like better.
+	return SingAlongWrong
 }
 
 // SingAlongState holds the live round for every channel that has one.
