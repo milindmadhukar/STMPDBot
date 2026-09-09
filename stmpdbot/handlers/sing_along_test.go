@@ -3,6 +3,9 @@ package handlers
 import (
 	"testing"
 	"time"
+
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/snowflake/v2"
 )
 
 // TestSingAlongLocalDate pins the one thing about the daily key that is easy to get
@@ -54,5 +57,52 @@ func TestSingAlongPermissionsAreComplete(t *testing.T) {
 		if permission.Flag == 0 {
 			t.Errorf("%q has no permission bit", permission.Name)
 		}
+	}
+}
+
+// One message over Discord's two-week line rejects the entire bulk call, so the
+// split has to happen before the call rather than in response to its failure --
+// otherwise a channel with any history at all deletes a hundred messages one at a
+// time when it could have made a single request.
+func TestSplitOnBulkDeleteAge(t *testing.T) {
+	now := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+
+	// Discord's epoch, which is what snowflake.ID.Time() decodes against.
+	at := func(d time.Duration) snowflake.ID {
+		return snowflake.New(now.Add(-d))
+	}
+
+	messages := []discord.Message{
+		{ID: at(time.Minute)},
+		{ID: at(24 * time.Hour)},
+		{ID: at(13 * 24 * time.Hour)},
+		{ID: at(20 * 24 * time.Hour)},
+		{ID: at(400 * 24 * time.Hour)},
+	}
+
+	fresh, stale := splitOnBulkDeleteAge(messages, now)
+
+	if len(fresh) != 3 {
+		t.Errorf("got %d bulk-deletable messages, want 3", len(fresh))
+	}
+	if len(stale) != 2 {
+		t.Errorf("got %d one-at-a-time messages, want 2", len(stale))
+	}
+
+	// Every message must end up in exactly one of the two buckets, or the wipe
+	// silently leaves some behind and re-reads the same page until the cap.
+	if len(fresh)+len(stale) != len(messages) {
+		t.Errorf("%d messages went in, %d came out", len(messages), len(fresh)+len(stale))
+	}
+}
+
+// The margin exists because Discord judges the boundary on its clock, not ours.
+func TestBulkDeleteMaxAgeLeavesAMargin(t *testing.T) {
+	const discordLimit = 14 * 24 * time.Hour
+	if bulkDeleteMaxAge >= discordLimit {
+		t.Errorf("bulkDeleteMaxAge = %s, must be under Discord's %s", bulkDeleteMaxAge, discordLimit)
+	}
+	if discordLimit-bulkDeleteMaxAge > 24*time.Hour {
+		t.Errorf("bulkDeleteMaxAge = %s gives up more than a day of the bulk window", bulkDeleteMaxAge)
 	}
 }

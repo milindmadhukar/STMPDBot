@@ -536,46 +536,89 @@ func wipeChannel(ctx context.Context, b *stmpdbot.STMPDBot, channelID snowflake.
 			return deleted, nil
 		}
 
-		ids := make([]snowflake.ID, 0, len(messages))
-		for _, message := range messages {
-			ids = append(ids, message.ID)
+		// Split on Discord's two-week rule BEFORE calling anything, rather than
+		// finding out from a rejection.
+		//
+		// One message over the line rejects the WHOLE bulk call, so reacting to the
+		// error meant a single ancient message dragged the other ninety-nine down
+		// the one-at-a-time path with it. In a channel with any history at all --
+		// exactly the case this runs in the first time it is pointed somewhere --
+		// every page looks like that, and a wipe that should be one API call became
+		// a hundred, visibly deleting messages one by one for minutes.
+		fresh, stale := splitOnBulkDeleteAge(messages, time.Now())
+
+		gone, err := bulkDelete(b, channelID, fresh)
+		deleted += gone
+		if err != nil {
+			return deleted, err
 		}
 
-		// Discord's bulk endpoint takes two to a hundred; disgo passes the slice
-		// straight through, so the single-message case is ours to handle.
-		if len(ids) == 1 {
-			if err := b.Client.Rest.DeleteMessage(channelID, ids[0]); err != nil {
-				return deleted, fmt.Errorf("failed to delete message: %w", err)
-			}
-			return deleted + 1, nil
+		// Only the genuinely old ones go the slow way, and only they pay for the
+		// pacing that Discord's much tighter limit on old deletions needs.
+		gone, err = deleteMessagesIndividually(ctx, b, channelID, stale)
+		deleted += gone
+		if err != nil {
+			return deleted, err
 		}
 
-		if err := b.Client.Rest.BulkDeleteMessages(channelID, ids); err != nil {
-			var restErr *rest.Error
-			if errors.As(err, &restErr) && restErr.Code == rest.JSONErrorCodeMessageTooOldToBulkDelete {
-				gone, err := deleteMessagesIndividually(ctx, b, channelID, ids)
-				deleted += gone
-				if err != nil {
-					return deleted, err
-				}
-				// Nothing on this page could be removed -- a system message, or a
-				// permission lost mid-wipe. Re-reading the same page until the cap
-				// only wastes the rate limit.
-				if gone == 0 {
-					return deleted, nil
-				}
-				continue
-			}
-			return deleted, fmt.Errorf("failed to bulk delete messages: %w", err)
+		// Nothing on this page could be removed -- a system message, or a permission
+		// lost mid-wipe. Re-reading the same page until the cap only wastes the rate
+		// limit.
+		if len(fresh)+len(stale) == 0 || (gone == 0 && len(fresh) == 0) {
+			return deleted, nil
 		}
-
-		deleted += len(ids)
 	}
 
 	slog.Warn("Stopped wiping the sing-along channel at the page cap",
 		slog.String("channel_id", channelID.String()),
 		slog.Int("deleted", deleted))
 	return deleted, nil
+}
+
+// bulkDeleteMaxAge is Discord's limit on what its bulk endpoint will accept. The
+// margin is because the boundary is judged server-side against a clock that is not
+// ours, and a message a second too old fails the whole batch.
+const bulkDeleteMaxAge = 14*24*time.Hour - time.Hour
+
+// splitOnBulkDeleteAge divides a page into what can be deleted in one call and what
+// has to go one at a time. A message's age comes from its snowflake, so this costs
+// nothing and needs no extra field from the API.
+func splitOnBulkDeleteAge(messages []discord.Message, now time.Time) (fresh, stale []snowflake.ID) {
+	for _, message := range messages {
+		if now.Sub(message.ID.Time()) < bulkDeleteMaxAge {
+			fresh = append(fresh, message.ID)
+		} else {
+			stale = append(stale, message.ID)
+		}
+	}
+	return fresh, stale
+}
+
+// bulkDelete removes a batch in one call, falling back for the sizes and the ages
+// Discord's bulk endpoint will not take.
+func bulkDelete(b *stmpdbot.STMPDBot, channelID snowflake.ID, ids []snowflake.ID) (int, error) {
+	switch len(ids) {
+	case 0:
+		return 0, nil
+	case 1:
+		// The endpoint takes two to a hundred, and disgo passes the slice straight
+		// through, so the single-message case is ours to handle.
+		if err := b.Client.Rest.DeleteMessage(channelID, ids[0]); err != nil {
+			return 0, fmt.Errorf("failed to delete message: %w", err)
+		}
+		return 1, nil
+	}
+
+	if err := b.Client.Rest.BulkDeleteMessages(channelID, ids); err != nil {
+		// Kept as a safety net for the boundary: the split above uses our clock, and
+		// Discord judges the age with its own.
+		var restErr *rest.Error
+		if errors.As(err, &restErr) && restErr.Code == rest.JSONErrorCodeMessageTooOldToBulkDelete {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to bulk delete messages: %w", err)
+	}
+	return len(ids), nil
 }
 
 // deleteMessagesIndividually is the slow path for messages Discord will not bulk
