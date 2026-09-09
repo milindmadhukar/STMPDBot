@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -18,9 +22,13 @@ import (
 	"github.com/milindmadhukar/STMPDBot/utils"
 )
 
-// singAlongTick is the check emoji held on a correct line, and the marker the
-// listener removes again a few seconds later.
-const SingAlongTick = "✅"
+// The marks the listener puts on an attempt. Plain unicode rather than the animated
+// custom emoji the quiz embeds use: a reaction has to resolve to an emoji this guild
+// can actually use, and the bot runs in servers that do not have those.
+const (
+	SingAlongTick  = "✅"
+	SingAlongCross = "❌"
+)
 
 // singAlongRollAttempts is how many songs to try before giving up on a round.
 //
@@ -369,8 +377,7 @@ func openSingAlongChannel(b *stmpdbot.STMPDBot, round utils.SingAlongRound) {
 
 	b.SingAlong.Set(round)
 
-	if _, err := b.Client.Rest.CreateMessage(round.ChannelID,
-		discord.NewMessageCreate().WithEmbeds(singAlongOpeningEmbed(round.Lines[0]))); err != nil {
+	if err := postSingAlongOpening(ctx, b, round); err != nil {
 		slog.Error("Failed to post the sing-along lyric",
 			slog.Int64("guild_id", int64(round.GuildID)),
 			slog.Any("err", err))
@@ -415,17 +422,107 @@ func rollSingAlongSong(ctx context.Context, b *stmpdbot.STMPDBot) (db.Song, []st
 		singAlongMinRoundLines, singAlongRollAttempts)
 }
 
-// singAlongOpeningEmbed is the day's lyric.
+// postSingAlongOpening posts the day's opening: a heading naming the record, the
+// bot taking the first line itself, and then that line as an ordinary message.
 //
-// Deliberately without utils.GetSongButtonRows. Every other song message in the bot
-// carries streaming links, and here they would hand out the answer to a game that
-// has just started. The links go on the completion message instead.
-func singAlongOpeningEmbed(first string) discord.Embed {
-	return discord.NewEmbed().
-		WithTitle("🎤 Sing along").
-		WithDescription(fmt.Sprintf("> %s", first)).
-		WithColor(utils.ColorSuccess).
-		WithFooter("Reply with the next line of the song", "")
+// Three plain messages rather than one embed, because the whole conceit is that the
+// bot is singing along in the channel like everybody else. An embed reads as the bot
+// announcing something; a bare line of lyrics in the channel reads as somebody
+// singing it, which is what the replies are meant to look like too.
+//
+// Naming the song is deliberate and is why there is no "guess the track" here: the
+// game is singing the NEXT line, so knowing the record is the point rather than a
+// spoiler.
+func postSingAlongOpening(ctx context.Context, b *stmpdbot.STMPDBot, round utils.SingAlongRound) error {
+	heading := "# Sing Along with me!"
+	if round.HasSong {
+		heading = fmt.Sprintf("# Sing Along with me! %s",
+			utils.SongHeading(round.Song.Artists, round.Song.Name, round.Song.MixName.String))
+	}
+
+	header := discord.NewMessageCreate().WithContent(heading)
+
+	// Attached rather than linked. A bare URL would make Discord render its own
+	// preview card, which is the embed this was written to get away from.
+	if cover, filename, ok := fetchSongCover(ctx, round.Song); ok {
+		header = header.AddFile(filename, "", bytes.NewReader(cover))
+	}
+
+	for _, message := range []discord.MessageCreate{
+		header,
+		discord.NewMessageCreate().WithContent("I'll go first"),
+		discord.NewMessageCreate().WithContent(round.Lines[0]),
+	} {
+		if _, err := b.Client.Rest.CreateMessage(round.ChannelID, message); err != nil {
+			return err
+		}
+		// Paced so the three land in the order they were written. Out of order the
+		// lyric arrives before the heading that frames it.
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	return nil
+}
+
+// singAlongCoverTimeout and singAlongCoverMaxBytes bound the artwork fetch.
+//
+// The cover is a nicety: the round is already claimed and the channel already
+// cleared by the time this runs, so a slow or oversized image must not be allowed to
+// hold up the lyric or fail the post.
+const (
+	singAlongCoverTimeout  = 10 * time.Second
+	singAlongCoverMaxBytes = 8 << 20
+)
+
+// fetchSongCover downloads the song's artwork so it can be attached. It reports
+// false for anything that would be better sent without a picture.
+func fetchSongCover(ctx context.Context, song db.Song) ([]byte, string, bool) {
+	if !song.ThumbnailUrl.Valid || song.ThumbnailUrl.String == "" {
+		return nil, "", false
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, singAlongCoverTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, song.ThumbnailUrl.String, nil)
+	if err != nil {
+		return nil, "", false
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Debug("Could not fetch the sing-along cover art", slog.Any("err", err))
+		return nil, "", false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Debug("Cover art fetch returned an error status", slog.Int("status", resp.StatusCode))
+		return nil, "", false
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, singAlongCoverMaxBytes))
+	if err != nil || len(body) == 0 {
+		return nil, "", false
+	}
+
+	return body, coverFilename(song.ThumbnailUrl.String), true
+}
+
+// coverFilename picks the name the attachment is uploaded under. Discord decides
+// whether to render an attachment inline from its extension, so an artwork URL that
+// carries none gets a plausible one rather than being shown as a file to download.
+func coverFilename(rawURL string) string {
+	ext := strings.ToLower(path.Ext(path.Base(rawURL)))
+	if i := strings.IndexAny(ext, "?#"); i >= 0 {
+		ext = ext[:i]
+	}
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+		return "cover" + ext
+	default:
+		return "cover.jpg"
+	}
 }
 
 // SingAlongCompletionMessage celebrates a song sung all the way through, and is the

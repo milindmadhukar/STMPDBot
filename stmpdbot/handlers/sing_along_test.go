@@ -106,3 +106,26 @@ func TestBulkDeleteMaxAgeLeavesAMargin(t *testing.T) {
 		t.Errorf("bulkDeleteMaxAge = %s gives up more than a day of the bulk window", bulkDeleteMaxAge)
 	}
 }
+
+// Discord decides whether to show an attachment inline from its extension, so an
+// artwork URL that carries none still has to be uploaded under a name that has one.
+func TestCoverFilename(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"jpg", "https://cdn.example.com/art/abc123.jpg", "cover.jpg"},
+		{"png", "https://cdn.example.com/art/abc123.png", "cover.png"},
+		{"webp", "https://cdn.example.com/art/abc.WEBP", "cover.webp"},
+		{"no extension", "https://is1-ssl.mzstatic.com/image/thumb/abc/600x600bb", "cover.jpg"},
+		{"query string", "https://cdn.example.com/a.png?width=600", "cover.png"},
+		{"not an image extension", "https://cdn.example.com/art/abc.aspx", "cover.jpg"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := coverFilename(tc.url); got != tc.want {
+				t.Errorf("coverFilename(%q) = %q, want %q", tc.url, got, tc.want)
+			}
+		})
+	}
+}

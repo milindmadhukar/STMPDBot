@@ -22,10 +22,13 @@ import (
 // about 3600 coins a day for somebody who never gets one wrong and never sleeps.
 const singAlongCoinsPerLine = 25
 
-// singAlongTickHold is how long the tick stays on a winning message before it is
-// taken off again. Long enough to be seen, short enough that the channel is not left
-// covered in them.
-const singAlongTickHold = 5 * time.Second
+// singAlongMarkHold is how long an attempt wears its mark.
+//
+// The same for both, so the channel reads consistently: a correct line keeps its
+// tick for this long and then loses the reaction, and a wrong one wears its cross
+// for this long and is then deleted. Long enough that the person who typed it sees
+// which it was, short enough that the channel is not left covered in marks.
+const singAlongMarkHold = 5 * time.Second
 
 // SingAlongListener scores the daily sing-along.
 //
@@ -52,8 +55,19 @@ func SingAlongListener(b *stmpdbot.STMPDBot) bot.EventListener {
 			return
 
 		case utils.SingAlongWrong:
+			// Marked before it goes, rather than vanishing without explanation. A
+			// message that simply disappears reads as the bot being broken; a cross
+			// says it was read and judged, and the five seconds are enough to see it.
 			go func() {
-				if err := b.Client.Rest.DeleteMessage(e.ChannelID, e.Message.ID); err != nil {
+				if err := b.Client.Rest.AddReaction(e.ChannelID, e.Message.ID, handlers.SingAlongCross); err != nil {
+					slog.Debug("Could not mark a wrong sing-along answer",
+						slog.String("message_id", e.Message.ID.String()),
+						slog.Any("err", err))
+				}
+				// WithDelay holds this goroutine for the wait, which is why none of
+				// this runs on the gateway's.
+				if err := b.Client.Rest.DeleteMessage(e.ChannelID, e.Message.ID,
+					rest.WithDelay(singAlongMarkHold)); err != nil {
 					slog.Debug("Could not delete a wrong sing-along answer",
 						slog.String("message_id", e.Message.ID.String()),
 						slog.Any("err", err))
@@ -101,7 +115,7 @@ func awardSingAlongLine(b *stmpdbot.STMPDBot, e *events.MessageCreate, round uti
 			slog.String("message_id", e.Message.ID.String()),
 			slog.Any("err", err))
 	} else if err := b.Client.Rest.RemoveOwnReaction(e.ChannelID, e.Message.ID,
-		handlers.SingAlongTick, rest.WithDelay(singAlongTickHold)); err != nil {
+		handlers.SingAlongTick, rest.WithDelay(singAlongMarkHold)); err != nil {
 		slog.Debug("Could not clear a sing-along tick",
 			slog.String("message_id", e.Message.ID.String()),
 			slog.Any("err", err))
