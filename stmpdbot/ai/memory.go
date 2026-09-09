@@ -34,23 +34,43 @@ const (
 	maxMemoryContentLen = 600
 )
 
-// LoadMemoryContext renders what the agent knows about this person and this
-// server as a system-prompt section, or "" when there is nothing.
+// LoadMemoryContext renders what the agent knows that bears on what was just
+// said, as a system-prompt section, or "" when there is nothing.
 //
-// Read unprompted, before the model has said anything, exactly as the old
-// implementation was: memory the model has to remember to look up is memory it
-// will forget to look up. The recall tool exists on top of this for the deeper
-// "what did they say about X" case, not instead of it.
-func LoadMemoryContext(ctx context.Context, mem *Memory, guildID, userID int64) (string, error) {
+// Read unprompted, before the model has said anything: memory the model has to
+// remember to look up is memory it will forget to look up. The recall tool
+// exists on top of this for a deeper follow-up, not instead of it.
+//
+// query is the message being answered, and it is what makes this work at all.
+// The first version listed memories instead of searching them, on the
+// assumption that the listing came back newest-first. It does not -- mem0
+// returns them in whatever order the vector store yields. That was survivable
+// with twenty memories and became useless at nine hundred: the bot was handed
+// twelve arbitrary pieces of trivia per message and could not see the fact it
+// had been told minutes earlier, however many times somebody repeated it.
+//
+// Searching costs an embedding round-trip per scope, which is the price of the
+// context actually being about the conversation.
+func LoadMemoryContext(ctx context.Context, mem *Memory, guildID, userID int64, query string) (string, error) {
 	if !mem.Enabled() {
 		return "", nil
 	}
 
-	personal, err := mem.List(ctx, UserKey(userID), memoryContextLimit)
+	// An image posted with no words leaves nothing to search on. Falling back
+	// to a listing is worse than nothing only if it is mistaken for relevance,
+	// and the heading below never claims it is.
+	lookup := mem.Search
+	if strings.TrimSpace(query) == "" {
+		lookup = func(ctx context.Context, key, _ string, limit int) ([]Record, error) {
+			return mem.List(ctx, key, limit)
+		}
+	}
+
+	personal, err := lookup(ctx, UserKey(userID), query, memoryContextLimit)
 	if err != nil {
 		return "", fmt.Errorf("memory: failed to load personal memories: %w", err)
 	}
-	shared, err := mem.List(ctx, SharedKey(guildID), memoryContextLimit)
+	shared, err := lookup(ctx, SharedKey(guildID), query, memoryContextLimit)
 	if err != nil {
 		return "", fmt.Errorf("memory: failed to load shared memories: %w", err)
 	}

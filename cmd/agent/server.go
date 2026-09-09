@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	db "github.com/milindmadhukar/STMPDBot/db/sqlc"
@@ -108,7 +109,10 @@ func (s *server) handleRespond(w http.ResponseWriter, r *http.Request) {
 	// prompt -- never left to the model to proactively "recall", so it
 	// can't forget to check. A failure to load it degrades to answering
 	// without memory rather than failing the whole reply.
-	memoryCtx, err := ai.LoadMemoryContext(ctx, s.memory, req.GuildID, req.UserID)
+	// Memory is searched against the message being answered, so what lands in
+	// the system prompt is about this conversation rather than an arbitrary
+	// slice of everything the bot knows. See LoadMemoryContext.
+	memoryCtx, err := ai.LoadMemoryContext(ctx, s.memory, req.GuildID, req.UserID, latestUserMessage(req.Messages))
 	if err != nil {
 		slog.Error("agent: failed to load memory context",
 			slog.Int64("guild_id", req.GuildID), slog.Int64("user_id", req.UserID), slog.Any("err", err))
@@ -195,6 +199,18 @@ func (s *server) handleForget(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("agent: forgot a user on request", slog.Int64("user_id", req.UserID), slog.Int("deleted", deleted))
 	writeJSON(w, http.StatusOK, forgetResponse{Deleted: deleted})
+}
+
+// latestUserMessage is the query memory is searched with: the thing the person
+// just said, not the whole reply chain. Older turns pull the search towards
+// whatever the conversation used to be about.
+func latestUserMessage(messages []respondMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && strings.TrimSpace(messages[i].Content) != "" {
+			return messages[i].Content
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

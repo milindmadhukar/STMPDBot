@@ -180,7 +180,7 @@ func TestNilMemoryIsUsable(t *testing.T) {
 	}
 	m.AddAsync("u", "x", nil) // must not panic
 
-	if ctxStr, err := LoadMemoryContext(ctx, m, 1, 2); err != nil || ctxStr != "" {
+	if ctxStr, err := LoadMemoryContext(ctx, m, 1, 2, "anything"); err != nil || ctxStr != "" {
 		t.Errorf("LoadMemoryContext: %q %v", ctxStr, err)
 	}
 }
@@ -236,7 +236,7 @@ func TestLoadMemoryContextReadsOnlyTheCallerAndTheGuild(t *testing.T) {
 	f.records["discord:42"] = []Record{{ID: "a", Memory: "likes melodic techno"}}
 	f.records["discord-guild:7"] = []Record{{ID: "b", Memory: "the server is about STMPD RCRDS"}}
 
-	out, err := LoadMemoryContext(context.Background(), m, 7, 42)
+	out, err := LoadMemoryContext(context.Background(), m, 7, 42, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestLoadMemoryContextEmptyWhenNothingRemembered(t *testing.T) {
 	t.Parallel()
 
 	_, m := newFakeMem0(t)
-	out, err := LoadMemoryContext(context.Background(), m, 7, 42)
+	out, err := LoadMemoryContext(context.Background(), m, 7, 42, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,5 +436,72 @@ func TestRecallRejectsAnUnknownScope(t *testing.T) {
 	if _, err := dispatchMemoryTool(context.Background(), m, 7, 42, "recall",
 		`{"query":"x","scope":"everyone"}`); err == nil {
 		t.Error("an invented scope was accepted")
+	}
+}
+
+// The bug: the context load listed memories instead of searching them, on the
+// assumption that listing came back newest-first. mem0 returns whatever order
+// the vector store yields, so once the shared pool reached 900 entries the bot
+// was handed twelve arbitrary facts per message. Told repeatedly who HALŌ
+// were, it kept answering that it had never heard of them -- the memory was
+// there, it was just never in the twelve.
+func TestLoadMemoryContextSearchesRatherThanListing(t *testing.T) {
+	t.Parallel()
+
+	f, m := newFakeMem0(t)
+	// Seeded so a listing would return them, but the assertion is about which
+	// endpoint gets called.
+	f.records["discord-guild:7"] = []Record{{ID: "s1", Memory: "HALO is DubVision, Third Party and Matisse & Sadko"}}
+	f.records["discord:42"] = []Record{{ID: "p1", Memory: "prefers melodic techno"}}
+
+	if _, err := LoadMemoryContext(context.Background(), m, 7, 42, "who is HALO?"); err != nil {
+		t.Fatal(err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var searched, listed int
+	for _, req := range f.requests {
+		switch {
+		case req.Method == http.MethodPost && req.Path == "/search":
+			searched++
+			if req.Body["query"] != "who is HALO?" {
+				t.Errorf("searched for %v, want the message being answered", req.Body["query"])
+			}
+		case req.Method == http.MethodGet && req.Path == "/memories":
+			listed++
+		}
+	}
+	if searched != 2 {
+		t.Errorf("made %d searches, want one per scope -- a blind listing cannot surface the relevant fact", searched)
+	}
+	if listed != 0 {
+		t.Errorf("made %d listings; listing returns arbitrary order and does not scale past a few dozen memories", listed)
+	}
+}
+
+// An image posted with no words has nothing to search on. Falling back to a
+// listing is fine there; falling over is not.
+func TestLoadMemoryContextFallsBackWhenThereIsNoQuery(t *testing.T) {
+	t.Parallel()
+
+	f, m := newFakeMem0(t)
+	f.records["discord:42"] = []Record{{ID: "p1", Memory: "prefers melodic techno"}}
+
+	out, err := LoadMemoryContext(context.Background(), m, 7, 42, "   ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "melodic techno") {
+		t.Errorf("got %q, want the listing fallback to still produce context", out)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, req := range f.requests {
+		if req.Path == "/search" {
+			t.Error("searched with an empty query instead of falling back to a listing")
+		}
 	}
 }
