@@ -80,6 +80,14 @@ func TestLineMatches(t *testing.T) {
 		{"punctuation does not matter", "ooh im scared of the dark without you here", true},
 		{"spacing does not matter", "Ooh,   I'm scared of the dark   without you here", true},
 		{"one typo is forgiven", "Ooh, I'm scared of the drak without you here", true},
+
+		// Nobody types a lyric back exactly. These are what people actually send,
+		// and every one of them is somebody who plainly knows the line.
+		{"a dropped opening filler", "im scared of the dark without you here", true},
+		{"text speak", "ooh im scared of the dark without u here", true},
+		{"one word remembered wrong", "Ooh, I'm afraid of the dark without you here", true},
+		{"a dropped word in the middle", "Ooh, I'm scared of dark without you here", true},
+
 		{"a single word is not the line", "scared", false},
 		{"a different line is not the line", "And I'm walking on a wire in the pouring rain", false},
 		{"empty is not the line", "   ", false},
@@ -226,5 +234,36 @@ func TestStateRetainDropsUnconfiguredChannels(t *testing.T) {
 	// messages until the bot was restarted.
 	if _, ok := state.Round(2); ok {
 		t.Error("an un-configured channel kept its round")
+	}
+}
+
+// The give is a ratio, so it buys less on a short line than a long one: one wrong
+// word in five is a fifth of the string. "Scared of the dark" against "Scared of the
+// night" scores 0.688 and is refused, and that is the intended edge -- past it the
+// threshold would start accepting lines that are merely about the same subject.
+func TestLineMatchesIsStricterOnShortLines(t *testing.T) {
+	if LineMatches("Scared of the dark", "Scared of the night") {
+		t.Error("a whole word wrong in a four-word line should not pass")
+	}
+	// The same size of mistake in a longer line is a much smaller fraction of it,
+	// and does pass.
+	if !LineMatches("Ooh, I'm scared of the dark without you here",
+		"Ooh, I'm scared of the night without you here") {
+		t.Error("a whole word wrong in a long line should pass")
+	}
+}
+
+// The threshold is chosen against measured data -- see the constant's comment. This
+// guards the two ends of that reasoning rather than the exact figure: loose enough
+// that a misremembered word survives, tight enough that a different line does not.
+func TestSingAlongThresholdStaysInItsBand(t *testing.T) {
+	if SingAlongThreshold > 0.80 {
+		t.Errorf("SingAlongThreshold = %.2f; above 0.80 it rejects most attempts where "+
+			"somebody knew the line but not one word of it", SingAlongThreshold)
+	}
+	if SingAlongThreshold <= QuizThreshold {
+		t.Errorf("SingAlongThreshold = %.2f must stay above QuizThreshold %.2f: that one "+
+			"compares against a song title, where a couple of characters are most of the string",
+			SingAlongThreshold, QuizThreshold)
 	}
 }

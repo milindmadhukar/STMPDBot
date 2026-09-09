@@ -11,13 +11,33 @@ import (
 
 // SingAlongThreshold is how close a message has to be to the line it is answering.
 //
-// Deliberately far stricter than QuizThreshold. The quiz compares a guess against a
-// song TITLE, where two characters are a large fraction of the string and 0.6 is
-// generous rather than loose. A lyric line is a sentence: across forty characters
-// 0.6 permits seventeen edits, which is close enough to accept a DIFFERENT line of
-// the same chorus -- and in a Garrix record consecutive chorus lines are often the
-// same words with one swapped.
-const SingAlongThreshold = 0.85
+// Nobody types a lyric back exactly, so this is measured rather than guessed. Across
+// 1460 real lines from the catalogue, comparing each line against a version of
+// itself with one whole word misheard:
+//
+//	threshold   misheard word accepted   adjacent-line false positives
+//	0.85        4.4%                     7.81%
+//	0.75        48.8%                    8.57%
+//	0.70        65.8%                    8.84%
+//	0.60        91.0%                    11.58%
+//
+// The first column is why 0.85 was wrong: it demanded near-perfect recall and threw
+// away all but a twentieth of the attempts where somebody remembered the line but
+// not one word of it. A single typo passes at any of these.
+//
+// The second column is why loosening is nearly free. Those false positives are
+// mostly not near misses at all -- they are lines a song repeats VERBATIM, where
+// adjacent pairs score exactly 1.0, and no threshold can separate them because there
+// is nothing to separate. That floor sits at 7.8% and moving from 0.85 to 0.70 buys
+// fifteen times the tolerance for one percentage point of it.
+//
+// 0.70 is also what the bot used in its Python days -- cogs/fun.py matched guesses
+// with difflib at 0.7 -- so this lands back on a number the community was already
+// playing against, from the other direction.
+//
+// It stays well above QuizThreshold's 0.6 because that compares a guess against a
+// song TITLE, where a couple of characters are a large fraction of the string.
+const SingAlongThreshold = 0.70
 
 // singAlongMaxLengthRatio rejects a message far longer than the line it claims to
 // be, before the edit-distance matrix runs.
