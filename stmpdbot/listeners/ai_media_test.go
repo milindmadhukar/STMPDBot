@@ -2,7 +2,9 @@ package listeners
 
 import (
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
@@ -133,5 +135,60 @@ func TestRenderEmoji(t *testing.T) {
 		if got := renderEmoji(tc.in); got != tc.want {
 			t.Errorf("%s: renderEmoji(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
 		}
+	}
+}
+
+// Discord expires the typing indicator after about ten seconds. A reply here
+// routinely takes longer than that -- memory search, a tool loop, a model
+// round-trip -- so sending it once left the channel looking idle while the bot
+// was still working, and the person asking assumed it had broken.
+func TestKeepTypingRefreshesUntilStopped(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var sends int
+
+	// The real one talks to Discord; this exercises the loop shape that
+	// matters -- an immediate send, then repeats until stopped.
+	send := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		sends++
+	}
+
+	done := make(chan struct{})
+	send()
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				send()
+			}
+		}
+	}()
+	stop := sync.OnceFunc(func() { close(done) })
+
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	stop() // must be safe twice: respond() defers it and may also return early
+
+	mu.Lock()
+	got := sends
+	mu.Unlock()
+
+	if got < 3 {
+		t.Errorf("sent the indicator %d times; it has to be re-asserted or it expires mid-reply", got)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	after := sends
+	mu.Unlock()
+	if after != got {
+		t.Errorf("kept sending after stop: %d -> %d", got, after)
 	}
 }

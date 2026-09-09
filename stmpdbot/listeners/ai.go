@@ -95,9 +95,8 @@ func respond(b *stmpdbot.STMPDBot, e *events.MessageCreate, isReply bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	if err := b.Client.Rest.SendTyping(e.ChannelID); err != nil {
-		slog.Debug("ai: failed to send typing indicator", slog.Any("err", err))
-	}
+	stopTyping := keepTyping(ctx, b, e.ChannelID)
+	defer stopTyping()
 
 	conversation := buildConversation(ctx, b, e)
 
@@ -118,6 +117,46 @@ func respond(b *stmpdbot.STMPDBot, e *events.MessageCreate, isReply bool) {
 	slog.Info("ai: replied",
 		slog.String("user_id", e.Message.Author.ID.String()),
 		slog.Bool("is_reply", isReply), slog.Duration("took", time.Since(start)))
+}
+
+// keepTyping holds the typing indicator up for as long as the reply takes.
+//
+// Discord expires it after about ten seconds and expects the bot to re-assert
+// it, so the single call this used to make showed "typing..." for a moment and
+// then left the channel looking idle -- while a memory search, a tool loop and
+// a model round-trip were still running, which together routinely outlast a
+// minute. The person asking sees nothing and assumes it broke.
+//
+// Returns a stop function; call it when the reply is sent, or on any path that
+// gives up.
+func keepTyping(ctx context.Context, b *stmpdbot.STMPDBot, channelID snowflake.ID) func() {
+	send := func() {
+		if err := b.Client.Rest.SendTyping(channelID); err != nil {
+			slog.Debug("ai: failed to send typing indicator", slog.Any("err", err))
+		}
+	}
+	send()
+
+	done := make(chan struct{})
+	go func() {
+		// Comfortably inside Discord's ~10s expiry, so the indicator never
+		// visibly flickers off between refreshes.
+		ticker := time.NewTicker(7 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				send()
+			}
+		}
+	}()
+
+	return sync.OnceFunc(func() { close(done) })
 }
 
 // buildConversation walks the Discord reply chain backwards from the
