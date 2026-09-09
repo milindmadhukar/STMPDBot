@@ -109,6 +109,7 @@ func (b *STMPDBot) StartInternalAPI() {
 	mux.HandleFunc("GET /internal/guilds/{guildID}/roles", b.handleInternalRoles)
 	mux.HandleFunc("GET /internal/guilds/{guildID}/channels", b.handleInternalChannels)
 	mux.HandleFunc("POST /internal/users/resolve", b.handleInternalResolve)
+	mux.HandleFunc("POST /internal/guilds/{guildID}/singalong/reroll", b.handleInternalSingAlongReroll)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -399,6 +400,51 @@ func newInternalChannel(ch discord.GuildChannel) internalChannel {
 		c.ParentID = parent.String()
 	}
 	return c
+}
+
+// internalSingAlongRoll is what the dashboard shows after a re-roll.
+type internalSingAlongRoll struct {
+	Song string `json:"song"`
+}
+
+// handleInternalSingAlongReroll replaces a guild's sing-along round on demand.
+//
+// It answers 202, not 200: what is finished when this returns is the round itself --
+// stored, live, and already scoring -- while clearing the channel and posting the
+// new lyric goes on in the background. The dashboard's client to this API gives up
+// after five seconds and a wipe is minutes of paced REST calls, so doing the whole
+// thing synchronously would report the bot unreachable while it was working.
+func (b *STMPDBot) handleInternalSingAlongReroll(w http.ResponseWriter, r *http.Request) {
+	guildID, ok := parseGuildID(w, r)
+	if !ok {
+		return
+	}
+
+	// Wired up in main.go once the gateway is ready. Before that the caches the
+	// permission check reads are empty, so "not yet" is the honest answer.
+	if b.SingAlongReroll == nil {
+		http.Error(w, "the bot is still starting up", http.StatusServiceUnavailable)
+		return
+	}
+
+	song, err := b.SingAlongReroll(r.Context(), guildID)
+	if err != nil {
+		// The message is written for an admin to read -- a missing permission names
+		// the permission -- so it is passed through rather than swallowed.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	// Headers before the status line, or neither of them reaches the client.
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusAccepted)
+
+	if err := json.NewEncoder(w).Encode(internalSingAlongRoll{
+		Song: utils.SongHeading(song.Artists, song.Name, song.MixName.String),
+	}); err != nil {
+		slog.Error("Failed to write sing-along re-roll response", slog.Any("err", err))
+	}
 }
 
 func parseGuildID(w http.ResponseWriter, r *http.Request) (snowflake.ID, bool) {

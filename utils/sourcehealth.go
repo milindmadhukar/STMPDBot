@@ -26,6 +26,11 @@ const (
 	// exactly when it has finished its job. A cycle is a success whenever the queue
 	// could be read and nothing failed at the HTTP layer.
 	SourceLyrics = "lrclib"
+	// SourceSingAlong follows the same rule as SourceAnniversary, and for the same
+	// reason: there is nothing remote to fetch, and a guild that has already had its
+	// lyric for the day is the normal state rather than a failure. A cycle counts as
+	// a success whenever the guild configs could be read.
+	SourceSingAlong = "sing-along"
 )
 
 // sourceFailureThreshold is how many consecutive bad cycles a source may have

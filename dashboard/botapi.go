@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -295,4 +297,55 @@ func RoleLookup(roles []BotRole) map[string]BotRole {
 		out[r.ID] = r
 	}
 	return out
+}
+
+// BotSingAlongRoll is what the bot reports after a re-roll.
+type BotSingAlongRoll struct {
+	Song string `json:"song"`
+}
+
+// ErrSingAlongRefused marks a re-roll the bot declined for a reason an admin can
+// act on -- a missing permission, no channel set. The message is written for a
+// person to read, so handlers show it rather than the degradation banner.
+var ErrSingAlongRefused = errors.New("sing-along re-roll refused")
+
+// RerollSingAlong asks the bot to replace a guild's sing-along round now.
+//
+// The bot answers as soon as the round is stored and live, and clears the channel
+// afterwards in the background -- a wipe is minutes of paced Discord calls and this
+// client gives up in five seconds. So a success here means "the new song is set",
+// not "the channel is already empty".
+func (b *BotAPI) RerollSingAlong(ctx context.Context, guildID snowflake.ID) (BotSingAlongRoll, error) {
+	var out BotSingAlongRoll
+	if !b.Configured() {
+		return out, ErrBotAPIUnavailable
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		b.baseURL+"/internal/guilds/"+guildID.String()+"/singalong/reroll", nil)
+	if err != nil {
+		return out, fmt.Errorf("%w: %w", ErrBotAPIUnavailable, err)
+	}
+	req.Header.Set("X-Internal-Token", b.secret)
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return out, fmt.Errorf("%w: %w", ErrBotAPIUnavailable, err)
+	}
+	defer resp.Body.Close()
+
+	// 422 is the bot saying no for a reason worth repeating verbatim; anything else
+	// unexpected is a transport-shaped failure and degrades like the rest.
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		reason, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return out, fmt.Errorf("%w: %s", ErrSingAlongRefused, strings.TrimSpace(string(reason)))
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return out, fmt.Errorf("%w: status %d", ErrBotAPIUnavailable, resp.StatusCode)
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, fmt.Errorf("%w: %w", ErrBotAPIUnavailable, err)
+	}
+	return out, nil
 }

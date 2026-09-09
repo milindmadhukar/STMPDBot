@@ -2,10 +2,12 @@ package commands
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/handler"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/milindmadhukar/STMPDBot/db/sqlc"
 	"github.com/milindmadhukar/STMPDBot/stmpdbot"
@@ -76,6 +78,54 @@ var config = discord.SlashCommandCreate{
 			Description: "Stop posting daily song anniversaries",
 		},
 		discord.ApplicationCommandOptionSubCommand{
+			Name:        "set-sing-along-channel",
+			Description: "Where to run the daily sing-along",
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionChannel{
+					Name:        "channel",
+					Description: "Everything in this channel is deleted when each new song drops",
+					Required:    true,
+					ChannelTypes: []discord.ChannelType{
+						discord.ChannelTypeGuildText,
+					},
+				},
+			},
+		},
+		discord.ApplicationCommandOptionSubCommand{
+			Name:        "set-sing-along-time",
+			Description: "When the daily lyric drops, and how long members wait between attempts",
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionInt{
+					Name:        "hour",
+					Description: "Hour of the day, 0-23, in the timezone below",
+					Required:    true,
+					MinValue:    &anniversaryMinHour,
+					MaxValue:    &anniversaryMaxHour,
+				},
+				discord.ApplicationCommandOptionString{
+					Name:         "timezone",
+					Description:  "IANA timezone, e.g. Europe/Amsterdam",
+					Required:     true,
+					Autocomplete: true,
+				},
+				discord.ApplicationCommandOptionInt{
+					Name:        "cooldown",
+					Description: "Minutes a member waits between attempts, applied as channel slowmode",
+					Required:    false,
+					MinValue:    &singAlongMinCooldown,
+					MaxValue:    &singAlongMaxCooldown,
+				},
+			},
+		},
+		discord.ApplicationCommandOptionSubCommand{
+			Name:        "sing-along-reroll",
+			Description: "Wipe the sing-along channel and start a new song right now",
+		},
+		discord.ApplicationCommandOptionSubCommand{
+			Name:        "disable-sing-along",
+			Description: "Stop the daily sing-along",
+		},
+		discord.ApplicationCommandOptionSubCommand{
 			Name:        "view",
 			Description: "View current server configuration",
 		},
@@ -86,7 +136,16 @@ var config = discord.SlashCommandCreate{
 var (
 	anniversaryMinHour = 0
 	anniversaryMaxHour = 23
+
+	// Discord's own slowmode ceiling is 21600 seconds, so six hours is as long a
+	// cooldown as could ever actually be applied.
+	singAlongMinCooldown = 0
+	singAlongMaxCooldown = 360
 )
+
+// singAlongDefaultCooldown matches the column default in migration 000030, for the
+// case where the guild row cannot be read while setting the schedule.
+const singAlongDefaultCooldown = 10
 
 func ConfigHandler(b *stmpdbot.STMPDBot) handler.CommandHandler {
 	return func(e *handler.CommandEvent) error {
@@ -114,6 +173,14 @@ func ConfigHandler(b *stmpdbot.STMPDBot) handler.CommandHandler {
 			return handleAnniversaryPreview(b, e)
 		case "disable-anniversaries":
 			return handleDisableAnniversaries(b, e)
+		case "set-sing-along-channel":
+			return handleSetSingAlongChannel(b, e)
+		case "set-sing-along-time":
+			return handleSetSingAlongTime(b, e)
+		case "sing-along-reroll":
+			return handleSingAlongReroll(b, e)
+		case "disable-sing-along":
+			return handleDisableSingAlong(b, e)
 		case "view":
 			return handleViewConfig(b, e)
 		default:
@@ -324,6 +391,167 @@ func handleDisableAnniversaries(b *stmpdbot.STMPDBot, e *handler.CommandEvent) e
 	)
 }
 
+func handleSetSingAlongChannel(b *stmpdbot.STMPDBot, e *handler.CommandEvent) error {
+	guildID := *e.GuildID()
+	channel := e.SlashCommandInteractionData().Channel("channel")
+
+	if err := b.Queries.SetSingAlongChannel(e.Ctx, db.SetSingAlongChannelParams{
+		GuildID:          int64(guildID),
+		SingAlongChannel: pgtype.Int8{Int64: int64(channel.ID), Valid: true},
+	}); err != nil {
+		return ephemeralFailure(e, "Configuration Failed",
+			fmt.Sprintf("Failed to set the sing-along channel: %s", err.Error()))
+	}
+
+	embed := discord.NewEmbed().
+		WithTitle("Sing-along Channel Updated").
+		WithDescription(fmt.Sprintf("The daily lyric will be posted in <#%d>.", channel.ID)).
+		// Said plainly and up front, because it is not recoverable and it is the one
+		// thing about this feature somebody could be surprised by.
+		AddField("Careful",
+			"Every message in that channel is deleted each time a new song drops. "+
+				"Do not point this at a channel holding anything worth keeping.", false).
+		WithColor(utils.ColorSuccess)
+
+	if config, err := b.Queries.GetGuild(e.Ctx, int64(guildID)); err == nil {
+		embed = embed.AddField("Schedule",
+			fmt.Sprintf("%02d:00 in `%s`, %d minute cooldown — change it with `/config set-sing-along-time`",
+				config.SingAlongHour, config.SingAlongTimezone, config.SingAlongCooldownMinutes), false)
+	}
+
+	return e.Respond(discord.InteractionResponseTypeCreateMessage,
+		discord.NewMessageCreate().WithEmbeds(embed),
+	)
+}
+
+func handleSetSingAlongTime(b *stmpdbot.STMPDBot, e *handler.CommandEvent) error {
+	data := e.SlashCommandInteractionData()
+	guildID := *e.GuildID()
+
+	hour := data.Int("hour")
+	timezone := data.String("timezone")
+
+	// Validated before writing, for the same reason as the anniversary schedule: a
+	// zone the scheduler cannot resolve leaves the feature silently dead.
+	loc, ok := utils.ValidateTimezone(timezone)
+	if !ok {
+		return ephemeralFailure(e, "Unknown Timezone",
+			fmt.Sprintf("`%s` is not an IANA timezone name. Try `Europe/Amsterdam`, "+
+				"`America/New_York`, `Asia/Kolkata` or `UTC`.", timezone))
+	}
+
+	// The cooldown is optional, so an admin changing only the hour keeps the wait
+	// they already chose rather than having it silently reset to the default.
+	cooldown := int32(singAlongDefaultCooldown)
+	if config, err := b.Queries.GetGuild(e.Ctx, int64(guildID)); err == nil {
+		cooldown = config.SingAlongCooldownMinutes
+	}
+	if minutes, ok := data.OptInt("cooldown"); ok {
+		cooldown = int32(minutes)
+	}
+
+	if err := b.Queries.SetSingAlongSchedule(e.Ctx, db.SetSingAlongScheduleParams{
+		GuildID:                  int64(guildID),
+		SingAlongHour:            int32(hour),
+		SingAlongTimezone:        timezone,
+		SingAlongCooldownMinutes: cooldown,
+	}); err != nil {
+		return ephemeralFailure(e, "Configuration Failed",
+			fmt.Sprintf("Failed to update the sing-along schedule: %s", err.Error()))
+	}
+
+	next := nextAnniversaryPost(hour, loc)
+
+	embed := discord.NewEmbed().
+		WithTitle("Sing-along Schedule Updated").
+		WithDescription(fmt.Sprintf(
+			"A new lyric will drop at **%02d:00** in `%s`, with a **%d minute** cooldown between attempts.",
+			hour, timezone, cooldown)).
+		AddField("Next lyric", fmt.Sprintf("<t:%d:F> (<t:%d:R>)", next.Unix(), next.Unix()), false).
+		WithColor(utils.ColorSuccess)
+
+	return e.Respond(discord.InteractionResponseTypeCreateMessage,
+		discord.NewMessageCreate().WithEmbeds(embed),
+	)
+}
+
+func handleSingAlongReroll(b *stmpdbot.STMPDBot, e *handler.CommandEvent) error {
+	guildID := *e.GuildID()
+
+	if b.SingAlongReroll == nil {
+		return ephemeralFailure(e, "Not Ready Yet",
+			"The bot is still starting up. Try again in a moment.")
+	}
+
+	song, err := b.SingAlongReroll(e.Ctx, guildID)
+	if err != nil {
+		return ephemeralFailure(e, "Re-roll Failed", err.Error())
+	}
+
+	embed := discord.NewEmbed().
+		WithTitle("Sing-along Re-rolled").
+		// The song is deliberately not named: the whole game is working out what it
+		// is. The channel is what tells the story from here.
+		WithDescription("A new song is set. The channel is being cleared, and its first line will appear in a moment.").
+		WithColor(utils.ColorSuccess)
+
+	slog.Info("Sing-along re-rolled from a slash command",
+		slog.Int64("guild_id", int64(guildID)),
+		slog.Int64("song_id", song.ID))
+
+	return e.Respond(discord.InteractionResponseTypeCreateMessage,
+		discord.NewMessageCreate().WithEmbeds(embed).WithEphemeral(true),
+	)
+}
+
+func handleDisableSingAlong(b *stmpdbot.STMPDBot, e *handler.CommandEvent) error {
+	guildID := *e.GuildID()
+
+	config, err := b.Queries.GetGuild(e.Ctx, int64(guildID))
+	if err != nil {
+		return ephemeralFailure(e, "Error", "Failed to fetch server configuration")
+	}
+
+	// Only the channel is cleared; the schedule and cooldown stay, so turning it
+	// back on remembers what the admin already picked.
+	if err := b.Queries.SetSingAlongChannel(e.Ctx, db.SetSingAlongChannelParams{
+		GuildID:          int64(guildID),
+		SingAlongChannel: pgtype.Int8{},
+	}); err != nil {
+		return ephemeralFailure(e, "Configuration Failed",
+			fmt.Sprintf("Failed to disable the sing-along: %s", err.Error()))
+	}
+
+	// The round has to go too, or the listener would keep deleting messages in a
+	// channel the feature no longer owns until the next scheduler cycle caught up.
+	if err := b.Queries.DeleteSingAlongRound(e.Ctx, int64(guildID)); err != nil {
+		slog.Error("Failed to clear the sing-along round", slog.Any("err", err))
+	}
+
+	if config.SingAlongChannel.Valid {
+		channelID := snowflake.ID(config.SingAlongChannel.Int64)
+		b.SingAlong.Clear(channelID)
+
+		// Slowmode belongs to the feature, not to the channel, so a channel handed
+		// back is handed back unthrottled.
+		noSlowmode := 0
+		if _, err := b.Client.Rest.UpdateChannel(channelID,
+			discord.GuildTextChannelUpdate{RateLimitPerUser: &noSlowmode}); err != nil {
+			slog.Warn("Failed to clear sing-along slowmode", slog.Any("err", err))
+		}
+	}
+
+	embed := discord.NewEmbed().
+		WithTitle("Sing-along Disabled").
+		WithDescription("No more daily lyrics will be posted, and the channel's slowmode has been cleared. " +
+			"Your time, timezone and cooldown have been kept for when you turn it back on.").
+		WithColor(utils.ColorSuccess)
+
+	return e.Respond(discord.InteractionResponseTypeCreateMessage,
+		discord.NewMessageCreate().WithEmbeds(embed),
+	)
+}
+
 // ConfigAutocompleteHandler serves the timezone suggestions on
 // /config set-anniversary-time. It is registered against "/config" because the
 // handler mux matches on the pattern's path segments, so one registration covers
@@ -444,6 +672,14 @@ func handleViewConfig(b *stmpdbot.STMPDBot, e *handler.CommandEvent) error {
 	}
 
 	embed = embed.AddField("Notification Channels", notificationsText, false)
+
+	singAlongText := "Not configured"
+	if config.SingAlongChannel.Valid {
+		singAlongText = fmt.Sprintf("<#%d> — daily at %02d:00 `%s`, %d minute cooldown",
+			config.SingAlongChannel.Int64, config.SingAlongHour,
+			config.SingAlongTimezone, config.SingAlongCooldownMinutes)
+	}
+	embed = embed.AddField("Sing-along", singAlongText, false)
 
 	return e.Respond(discord.InteractionResponseTypeCreateMessage,
 		discord.NewMessageCreate().

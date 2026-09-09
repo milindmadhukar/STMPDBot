@@ -16,6 +16,12 @@
     </div>
   {{end}}
 
+  {{if .Data.Notice}}
+    <div class="rounded-lg border border-mint-300/30 bg-mint-300/10 px-4 py-3 text-sm text-mint-100">
+      {{.Data.Notice}}
+    </div>
+  {{end}}
+
   {{if .Data.Saved}}
     <div class="rounded-lg border border-mint-300/30 bg-mint-300/10 px-4 py-3 text-sm text-mint-100">
       Saved{{if .Data.Saved}} — updated {{len .Data.Saved}} setting{{if ne (len .Data.Saved) 1}}s{{end}}{{end}}.
@@ -89,6 +95,45 @@
           </div>
         {{end}}
 
+        {{/* The sing-along schedule and cooldown sit with the channel they
+             govern, the same way the anniversary time does above. */}}
+        {{if eq .ID "singalong"}}
+          <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+            <label for="sing_along_hour" class="sm:w-64 sm:shrink-0">
+              <span class="block text-sm text-slate-200">Daily lyric time</span>
+              <span class="block text-xs text-slate-500">When the channel is wiped and the next song's first line goes up.</span>
+            </label>
+            <div class="flex min-w-0 flex-1 flex-wrap gap-2">
+              <select id="sing_along_hour" name="sing_along_hour"
+                      class="field px-2 py-1.5 text-sm text-slate-200">
+                {{range $.Data.SingAlong.Hours}}
+                  <option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>
+                {{end}}
+              </select>
+              <input type="text" id="sing_along_timezone" name="sing_along_timezone"
+                     value="{{$.Data.SingAlong.Timezone}}"
+                     placeholder="Asia/Kolkata"
+                     class="min-w-0 flex-1 field px-2 py-1.5 text-sm text-slate-200">
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+            <label for="{{$.Data.SingAlong.CooldownKey}}" class="sm:w-64 sm:shrink-0">
+              <span class="block text-sm text-slate-200">Attempt cooldown (minutes)</span>
+              <span class="block text-xs text-slate-500">
+                Applied as the channel's own slowmode within a few minutes, and kept there —
+                changing slowmode in Discord will be undone. A wrong answer spends the wait. 0 turns it off.
+              </span>
+            </label>
+            <div class="min-w-0 flex-1">
+              <input type="number" step="1" min="{{$.Data.SingAlong.CooldownMin}}" max="{{$.Data.SingAlong.CooldownMax}}"
+                     id="{{$.Data.SingAlong.CooldownKey}}" name="{{$.Data.SingAlong.CooldownKey}}"
+                     value="{{$.Data.SingAlong.Cooldown}}"
+                     class="w-32 field px-2 py-1.5 text-sm text-slate-200">
+            </div>
+          </div>
+        {{end}}
+
         {{if eq .ID "levels"}}
           <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
             <label for="{{$.Data.LevelUpKey}}" class="sm:w-64 sm:shrink-0">
@@ -123,6 +168,32 @@
         <button type="submit"
                 class="rounded-full bg-mint-300 px-4 py-1.5 text-sm font-semibold text-black transition hover:bg-mint-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-mint-300 focus-visible:ring-offset-2 focus-visible:ring-offset-black">
           Save {{.Title}}
+        </button>
+      </div>
+    </form>
+  {{end}}
+
+  {{/* A sibling of the group forms rather than a control inside one: HTML forbids
+       a nested form, and this posts somewhere else entirely -- it asks the bot to
+       clear a channel, not the dashboard to save a field. */}}
+  {{if .Data.SingAlong.Configured}}
+    <form class="panel"
+          hx-post="/g/{{$guildID}}/settings/singalong/reroll"
+          hx-target="#settings-form"
+          hx-swap="outerHTML"
+          hx-confirm="Delete every message in the sing-along channel and start a new song? This cannot be undone.">
+      <div class="panel-head">
+        <h2 class="stamp-label">Re-roll the sing-along</h2>
+        <p class="mt-0.5 text-xs text-slate-500">
+          Wipes the channel now and drops the first line of a different Martin Garrix track,
+          without waiting for tomorrow.
+        </p>
+      </div>
+      <div class="flex items-center justify-end gap-3 border-t border-white/10 px-4 py-3">
+        <span class="htmx-indicator text-xs text-slate-500">Re-rolling…</span>
+        <button type="submit"
+                class="rounded-full bg-mint-300 px-4 py-1.5 text-sm font-semibold text-black transition hover:bg-mint-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-mint-300 focus-visible:ring-offset-2 focus-visible:ring-offset-black">
+          Re-roll now
         </button>
       </div>
     </form>

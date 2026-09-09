@@ -11,6 +11,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/milindmadhukar/STMPDBot/db/sqlc"
+	"github.com/milindmadhukar/STMPDBot/utils"
 )
 
 // buildUpdate turns a submitted form into UpdateGuildConfigParams, validating
@@ -128,9 +129,15 @@ func (s *Server) buildUpdate(
 		NewsRole:                     roleField("news_role", "News role", guild.NewsRole),
 		LevelUpRole:                  roleField("level_up_role", "Level-up role", guild.LevelUpRole),
 
+		SingAlongChannel: channelField("sing_along_channel", "Sing-along channel", guild.SingAlongChannel, textChannels, "text"),
+
 		AnniversaryHour:     guild.AnniversaryHour,
 		AnniversaryTimezone: guild.AnniversaryTimezone,
-		XpMultiplier:        guild.XpMultiplier,
+		// Carried forward for the same reason as LevelUpRoleLevel below.
+		SingAlongHour:            guild.SingAlongHour,
+		SingAlongTimezone:        guild.SingAlongTimezone,
+		SingAlongCooldownMinutes: guild.SingAlongCooldownMinutes,
+		XpMultiplier:             guild.XpMultiplier,
 		// Carried forward unless the form says otherwise. UpdateGuildConfig is a
 		// full-row update, so a field left at its zero value here is a silent wipe.
 		LevelUpRoleLevel: guild.LevelUpRoleLevel,
@@ -153,6 +160,44 @@ func (s *Server) buildUpdate(
 			problems = append(problems, fmt.Sprintf("Anniversary timezone: %q is not a valid IANA zone.", tz))
 		} else {
 			params.AnniversaryTimezone = tz
+		}
+	}
+
+	if raw, ok := form["sing_along_hour"]; ok {
+		hour, err := strconv.Atoi(strings.TrimSpace(raw[0]))
+		if err != nil || hour < 0 || hour > 23 {
+			problems = append(problems, "Sing-along hour: must be between 0 and 23.")
+		} else {
+			params.SingAlongHour = int32(hour)
+		}
+	}
+
+	if raw, ok := form["sing_along_timezone"]; ok {
+		tz := strings.TrimSpace(raw[0])
+		// ValidateTimezone rather than time.LoadLocation, which accepts "Local" and
+		// binds it to whatever the log config's zone happens to be -- see
+		// utils/timezones.go. A scheduler that resolves the zone the same way the
+		// form validated it is the whole point.
+		if _, ok := utils.ValidateTimezone(tz); !ok {
+			problems = append(problems, fmt.Sprintf("Sing-along timezone: %q is not a valid IANA zone.", tz))
+		} else {
+			params.SingAlongTimezone = tz
+		}
+	}
+
+	if raw, ok := form[singAlongCooldownKey]; ok {
+		minutes, err := strconv.Atoi(strings.TrimSpace(raw[0]))
+		switch {
+		case err != nil:
+			problems = append(problems, "Sing-along cooldown: must be a whole number of minutes.")
+		case minutes < minSingAlongCooldown || minutes > maxSingAlongCooldown:
+			// Discord's own slowmode ceiling is 21600 seconds, so anything above six
+			// hours could not be applied even if it were stored.
+			problems = append(problems, fmt.Sprintf(
+				"Sing-along cooldown: must be between %d and %d minutes.",
+				minSingAlongCooldown, maxSingAlongCooldown))
+		default:
+			params.SingAlongCooldownMinutes = int32(minutes)
 		}
 	}
 
@@ -226,6 +271,17 @@ func changedFields(before db.Guild, after db.UpdateGuildConfigParams) []string {
 	}
 	if before.AnniversaryTimezone != after.AnniversaryTimezone {
 		changed = append(changed, "anniversary_timezone")
+	}
+	compare("sing_along_channel", before.SingAlongChannel, after.SingAlongChannel)
+
+	if before.SingAlongHour != after.SingAlongHour {
+		changed = append(changed, "sing_along_hour")
+	}
+	if before.SingAlongTimezone != after.SingAlongTimezone {
+		changed = append(changed, "sing_along_timezone")
+	}
+	if before.SingAlongCooldownMinutes != after.SingAlongCooldownMinutes {
+		changed = append(changed, singAlongCooldownKey)
 	}
 	if before.XpMultiplier != after.XpMultiplier {
 		changed = append(changed, xpMultiplierKey)

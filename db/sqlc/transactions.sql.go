@@ -24,6 +24,33 @@ func (q *Queries) AddCoins(ctx context.Context, arg AddCoinsParams) error {
 	return err
 }
 
+const awardCoins = `-- name: AwardCoins :execrows
+UPDATE users
+SET in_hand = in_hand + $3
+WHERE id = $1 AND guild_id = $2
+`
+
+type AwardCoinsParams struct {
+	ID      int64 `json:"id"`
+	GuildID int64 `json:"guildId"`
+	InHand  int64 `json:"inHand"`
+}
+
+// TODO: Use sqlc.arg for argument names
+// AddCoins, but it says whether it actually paid anybody.
+//
+// The UPDATE matches on (id, guild_id), so a member with no users row is silently
+// passed over -- fine for the paths that create the row first, not fine for the
+// sing-along, where the award is the reward for playing and losing it quietly is the
+// worst outcome. The caller creates the row and retries on 0.
+func (q *Queries) AwardCoins(ctx context.Context, arg AwardCoinsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, awardCoins, arg.ID, arg.GuildID, arg.InHand)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const depositAmount = `-- name: DepositAmount :exec
 UPDATE users SET in_hand = in_hand - $3, stmpd_coins = stmpd_coins + $3 WHERE id = $1 AND guild_id = $2
 `

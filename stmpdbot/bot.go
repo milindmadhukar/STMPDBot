@@ -18,6 +18,7 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgolink/v4/disgolink"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/golang-migrate/migrate/v4"
 	migratePgx "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -31,9 +32,10 @@ import (
 
 func New(cfg Config, version string, commit string) *STMPDBot {
 	return &STMPDBot{
-		Cfg:     cfg,
-		Version: version,
-		Commit:  commit,
+		Cfg:       cfg,
+		Version:   version,
+		Commit:    commit,
+		SingAlong: utils.NewSingAlongState(),
 	}
 }
 
@@ -55,6 +57,19 @@ type STMPDBot struct {
 	// enabled -- see SetupLLM. It talks to the standalone agent service
 	// (cmd/agent) over HTTP; the bot never holds an LLM API key itself.
 	AgentClient *utils.AgentClient
+
+	// SingAlong is the live sing-along round for every guild running one, so the
+	// message listener can answer "is this a sing-along channel?" without a query
+	// on every message in every guild. The database stays the authority; this is
+	// rebuilt from it on the scheduler's first pass.
+	SingAlong *utils.SingAlongState
+
+	// SingAlongReroll re-rolls a guild's sing-along on demand, for the dashboard's
+	// button. It is a hook rather than a direct call because the internal API lives
+	// in this package and stmpdbot/handlers imports it, so the dependency can only
+	// run one way; main.go wires it up. Nil until then, which the route reports as
+	// unavailable rather than pretending to have worked.
+	SingAlongReroll func(ctx context.Context, guildID snowflake.ID) (db.Song, error)
 
 	// resolveCache memoises user lookups made by the internal API, so paging
 	// through a log does not re-request the same moderators on every page.

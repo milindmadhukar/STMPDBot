@@ -15,7 +15,7 @@ const createGuild = `-- name: CreateGuild :one
 INSERT INTO guilds(guild_id)
 VALUES ($1)
 ON CONFLICT (guild_id) DO NOTHING
-RETURNING guild_id, modlogs_channel, leave_join_logs_channel, youtube_notifications_channel, youtube_notifications_role, reddit_notifications_channel, reddit_notifications_role, stmpd_notifications_channel, stmpd_notifications_role, welcomes_channel, delete_logs_channel, edit_logs_channel, bot_channel, radio_voice_channel, news_role, xp_multiplier, tour_notifications_channel, tour_notifications_role, moderator_role, anniversary_notifications_channel, anniversary_notifications_role, anniversary_hour, anniversary_timezone, voice_logs_channel, member_logs_channel, level_up_role, level_up_role_level, background_mode, background_cycle_background_id
+RETURNING guild_id, modlogs_channel, leave_join_logs_channel, youtube_notifications_channel, youtube_notifications_role, reddit_notifications_channel, reddit_notifications_role, stmpd_notifications_channel, stmpd_notifications_role, welcomes_channel, delete_logs_channel, edit_logs_channel, bot_channel, radio_voice_channel, news_role, xp_multiplier, tour_notifications_channel, tour_notifications_role, moderator_role, anniversary_notifications_channel, anniversary_notifications_role, anniversary_hour, anniversary_timezone, voice_logs_channel, member_logs_channel, level_up_role, level_up_role_level, background_mode, background_cycle_background_id, sing_along_channel, sing_along_hour, sing_along_timezone, sing_along_cooldown_minutes
 `
 
 func (q *Queries) CreateGuild(ctx context.Context, guildID int64) (Guild, error) {
@@ -51,12 +51,38 @@ func (q *Queries) CreateGuild(ctx context.Context, guildID int64) (Guild, error)
 		&i.LevelUpRoleLevel,
 		&i.BackgroundMode,
 		&i.BackgroundCycleBackgroundID,
+		&i.SingAlongChannel,
+		&i.SingAlongHour,
+		&i.SingAlongTimezone,
+		&i.SingAlongCooldownMinutes,
 	)
 	return i, err
 }
 
+const getDeleteLogRouting = `-- name: GetDeleteLogRouting :one
+SELECT delete_logs_channel, sing_along_channel FROM guilds WHERE guild_id = $1
+`
+
+type GetDeleteLogRoutingRow struct {
+	DeleteLogsChannel pgtype.Int8 `json:"deleteLogsChannel"`
+	SingAlongChannel  pgtype.Int8 `json:"singAlongChannel"`
+}
+
+// Where deletions are logged, and which channel to stay out of, in one round trip.
+//
+// The delete-log listener needs both because the sing-along deletes a wrong guess on
+// every attempt and empties its channel once a day. disgo fans MESSAGE_DELETE_BULK
+// out into one GuildMessageDelete per message, so without this a single daily wipe
+// would post several hundred "Message Deleted" embeds into the moderation log.
+func (q *Queries) GetDeleteLogRouting(ctx context.Context, guildID int64) (GetDeleteLogRoutingRow, error) {
+	row := q.db.QueryRow(ctx, getDeleteLogRouting, guildID)
+	var i GetDeleteLogRoutingRow
+	err := row.Scan(&i.DeleteLogsChannel, &i.SingAlongChannel)
+	return i, err
+}
+
 const getGuild = `-- name: GetGuild :one
-SELECT guild_id, modlogs_channel, leave_join_logs_channel, youtube_notifications_channel, youtube_notifications_role, reddit_notifications_channel, reddit_notifications_role, stmpd_notifications_channel, stmpd_notifications_role, welcomes_channel, delete_logs_channel, edit_logs_channel, bot_channel, radio_voice_channel, news_role, xp_multiplier, tour_notifications_channel, tour_notifications_role, moderator_role, anniversary_notifications_channel, anniversary_notifications_role, anniversary_hour, anniversary_timezone, voice_logs_channel, member_logs_channel, level_up_role, level_up_role_level, background_mode, background_cycle_background_id FROM guilds WHERE guild_id = $1
+SELECT guild_id, modlogs_channel, leave_join_logs_channel, youtube_notifications_channel, youtube_notifications_role, reddit_notifications_channel, reddit_notifications_role, stmpd_notifications_channel, stmpd_notifications_role, welcomes_channel, delete_logs_channel, edit_logs_channel, bot_channel, radio_voice_channel, news_role, xp_multiplier, tour_notifications_channel, tour_notifications_role, moderator_role, anniversary_notifications_channel, anniversary_notifications_role, anniversary_hour, anniversary_timezone, voice_logs_channel, member_logs_channel, level_up_role, level_up_role_level, background_mode, background_cycle_background_id, sing_along_channel, sing_along_hour, sing_along_timezone, sing_along_cooldown_minutes FROM guilds WHERE guild_id = $1
 `
 
 func (q *Queries) GetGuild(ctx context.Context, guildID int64) (Guild, error) {
@@ -92,6 +118,10 @@ func (q *Queries) GetGuild(ctx context.Context, guildID int64) (Guild, error) {
 		&i.LevelUpRoleLevel,
 		&i.BackgroundMode,
 		&i.BackgroundCycleBackgroundID,
+		&i.SingAlongChannel,
+		&i.SingAlongHour,
+		&i.SingAlongTimezone,
+		&i.SingAlongCooldownMinutes,
 	)
 	return i, err
 }
@@ -301,9 +331,13 @@ UPDATE guilds SET
     radio_voice_channel             = $24,
     xp_multiplier                   = $25,
     level_up_role                   = $26,
-    level_up_role_level             = $27
+    level_up_role_level             = $27,
+    sing_along_channel              = $28,
+    sing_along_hour                 = $29,
+    sing_along_timezone             = $30,
+    sing_along_cooldown_minutes     = $31
 WHERE guild_id = $1
-RETURNING guild_id, modlogs_channel, leave_join_logs_channel, youtube_notifications_channel, youtube_notifications_role, reddit_notifications_channel, reddit_notifications_role, stmpd_notifications_channel, stmpd_notifications_role, welcomes_channel, delete_logs_channel, edit_logs_channel, bot_channel, radio_voice_channel, news_role, xp_multiplier, tour_notifications_channel, tour_notifications_role, moderator_role, anniversary_notifications_channel, anniversary_notifications_role, anniversary_hour, anniversary_timezone, voice_logs_channel, member_logs_channel, level_up_role, level_up_role_level, background_mode, background_cycle_background_id
+RETURNING guild_id, modlogs_channel, leave_join_logs_channel, youtube_notifications_channel, youtube_notifications_role, reddit_notifications_channel, reddit_notifications_role, stmpd_notifications_channel, stmpd_notifications_role, welcomes_channel, delete_logs_channel, edit_logs_channel, bot_channel, radio_voice_channel, news_role, xp_multiplier, tour_notifications_channel, tour_notifications_role, moderator_role, anniversary_notifications_channel, anniversary_notifications_role, anniversary_hour, anniversary_timezone, voice_logs_channel, member_logs_channel, level_up_role, level_up_role_level, background_mode, background_cycle_background_id, sing_along_channel, sing_along_hour, sing_along_timezone, sing_along_cooldown_minutes
 `
 
 type UpdateGuildConfigParams struct {
@@ -334,6 +368,10 @@ type UpdateGuildConfigParams struct {
 	XpMultiplier                    float64     `json:"xpMultiplier"`
 	LevelUpRole                     pgtype.Int8 `json:"levelUpRole"`
 	LevelUpRoleLevel                int32       `json:"levelUpRoleLevel"`
+	SingAlongChannel                pgtype.Int8 `json:"singAlongChannel"`
+	SingAlongHour                   int32       `json:"singAlongHour"`
+	SingAlongTimezone               string      `json:"singAlongTimezone"`
+	SingAlongCooldownMinutes        int32       `json:"singAlongCooldownMinutes"`
 }
 
 // A full-row update rather than per-field setters or COALESCE.
@@ -375,6 +413,10 @@ func (q *Queries) UpdateGuildConfig(ctx context.Context, arg UpdateGuildConfigPa
 		arg.XpMultiplier,
 		arg.LevelUpRole,
 		arg.LevelUpRoleLevel,
+		arg.SingAlongChannel,
+		arg.SingAlongHour,
+		arg.SingAlongTimezone,
+		arg.SingAlongCooldownMinutes,
 	)
 	var i Guild
 	err := row.Scan(
@@ -407,6 +449,10 @@ func (q *Queries) UpdateGuildConfig(ctx context.Context, arg UpdateGuildConfigPa
 		&i.LevelUpRoleLevel,
 		&i.BackgroundMode,
 		&i.BackgroundCycleBackgroundID,
+		&i.SingAlongChannel,
+		&i.SingAlongHour,
+		&i.SingAlongTimezone,
+		&i.SingAlongCooldownMinutes,
 	)
 	return i, err
 }

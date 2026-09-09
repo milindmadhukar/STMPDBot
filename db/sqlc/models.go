@@ -17,6 +17,14 @@ type AgentMemory struct {
 	CreatedAt pgtype.Timestamptz `json:"createdAt"`
 }
 
+type AgentMemoryDigest struct {
+	ID              int16              `json:"id"`
+	LastRunAt       pgtype.Timestamptz `json:"lastRunAt"`
+	Watermark       pgtype.Timestamptz `json:"watermark"`
+	MessagesSeen    int32              `json:"messagesSeen"`
+	MemoriesWritten int32              `json:"memoriesWritten"`
+}
+
 type AnniversaryPost struct {
 	GuildID   int64              `json:"guildId"`
 	LocalDate pgtype.Date        `json:"localDate"`
@@ -61,6 +69,10 @@ type Guild struct {
 	LevelUpRoleLevel                int32       `json:"levelUpRoleLevel"`
 	BackgroundMode                  string      `json:"backgroundMode"`
 	BackgroundCycleBackgroundID     pgtype.Int8 `json:"backgroundCycleBackgroundId"`
+	SingAlongChannel                pgtype.Int8 `json:"singAlongChannel"`
+	SingAlongHour                   int32       `json:"singAlongHour"`
+	SingAlongTimezone               string      `json:"singAlongTimezone"`
+	SingAlongCooldownMinutes        int32       `json:"singAlongCooldownMinutes"`
 }
 
 type GuildBackground struct {
@@ -101,6 +113,16 @@ type Modlog struct {
 
 type RedditPost struct {
 	PostID string `json:"postId"`
+}
+
+type SingAlongRound struct {
+	GuildID     int64              `json:"guildId"`
+	LocalDate   pgtype.Date        `json:"localDate"`
+	SongID      pgtype.Int8        `json:"songId"`
+	LyricLines  []string           `json:"lyricLines"`
+	Cursor      int32              `json:"cursor"`
+	StartedAt   pgtype.Timestamptz `json:"startedAt"`
+	CompletedAt pgtype.Timestamptz `json:"completedAt"`
 }
 
 type Song struct {

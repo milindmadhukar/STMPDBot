@@ -8,7 +8,8 @@ A community-built Discord bot for STMPD RCRDS — turning listeners into an acti
 - **Lyrics lookup** — search any song by name, with search-as-you-type suggestions
 - **Streaming links** — Spotify, Apple Music, YouTube and Beatport on a single card
 - **Track detail** — BPM, musical key, genre, mix name, release date and length
-- **Sing-along** — the bot drops a lyric, members race to complete the next line for points
+- **Daily sing-along** — a Martin Garrix lyric a day; sing the next line first for coins,
+  and the channel is wiped clean before the next song
 - **Lyric quiz** — guess the song from its lyrics, across four difficulty tiers
 - **Song anniversaries** — "X years ago today" release throwbacks
 

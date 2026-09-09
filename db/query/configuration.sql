@@ -82,6 +82,19 @@ UPDATE guilds SET
     radio_voice_channel             = $24,
     xp_multiplier                   = $25,
     level_up_role                   = $26,
-    level_up_role_level             = $27
+    level_up_role_level             = $27,
+    sing_along_channel              = $28,
+    sing_along_hour                 = $29,
+    sing_along_timezone             = $30,
+    sing_along_cooldown_minutes     = $31
 WHERE guild_id = $1
 RETURNING *;
+
+-- name: GetDeleteLogRouting :one
+-- Where deletions are logged, and which channel to stay out of, in one round trip.
+--
+-- The delete-log listener needs both because the sing-along deletes a wrong guess on
+-- every attempt and empties its channel once a day. disgo fans MESSAGE_DELETE_BULK
+-- out into one GuildMessageDelete per message, so without this a single daily wipe
+-- would post several hundred "Message Deleted" embeds into the moderation log.
+SELECT delete_logs_channel, sing_along_channel FROM guilds WHERE guild_id = $1;

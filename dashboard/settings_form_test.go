@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,6 +39,11 @@ func fixtureGuild() db.Guild {
 		XpMultiplier:        1.0,
 		LevelUpRole:         pgtype.Int8{Int64: 900, Valid: true},
 		LevelUpRoleLevel:    13,
+
+		SingAlongChannel:         pgtype.Int8{Int64: 100, Valid: true},
+		SingAlongHour:            9,
+		SingAlongTimezone:        "Asia/Kolkata",
+		SingAlongCooldownMinutes: 10,
 	}
 }
 
@@ -318,5 +324,133 @@ func TestBuildUpdateLevelUpRoleRules(t *testing.T) {
 	}
 	if params.LevelUpRole.Valid {
 		t.Error("an empty submission must clear the level-up role")
+	}
+}
+
+// The sing-along columns went onto the same full-row UpdateGuildConfig as everything
+// else, which means a save of ANY other group carries them. If buildUpdate ever
+// stops carrying one forward, saving the Logging panel silently wipes it.
+func TestBuildUpdateCarriesSingAlongThroughOtherSaves(t *testing.T) {
+	before := fixtureGuild()
+
+	params, problems := build(t, url.Values{"modlogs_channel": {"101"}})
+	if len(problems) > 0 {
+		t.Fatalf("unexpected problems: %v", problems)
+	}
+
+	if params.SingAlongChannel != before.SingAlongChannel {
+		t.Errorf("SingAlongChannel = %+v, want it carried forward", params.SingAlongChannel)
+	}
+	if params.SingAlongHour != before.SingAlongHour {
+		t.Errorf("SingAlongHour = %d, want %d", params.SingAlongHour, before.SingAlongHour)
+	}
+	if params.SingAlongTimezone != before.SingAlongTimezone {
+		t.Errorf("SingAlongTimezone = %q, want %q", params.SingAlongTimezone, before.SingAlongTimezone)
+	}
+	if params.SingAlongCooldownMinutes != before.SingAlongCooldownMinutes {
+		t.Errorf("SingAlongCooldownMinutes = %d, want %d",
+			params.SingAlongCooldownMinutes, before.SingAlongCooldownMinutes)
+	}
+}
+
+func TestBuildUpdateSingAlongChannel(t *testing.T) {
+	params, problems := build(t, url.Values{"sing_along_channel": {"101"}})
+	if len(problems) > 0 {
+		t.Fatalf("unexpected problems: %v", problems)
+	}
+	if !params.SingAlongChannel.Valid || params.SingAlongChannel.Int64 != 101 {
+		t.Errorf("sing_along_channel = %+v, want 101", params.SingAlongChannel)
+	}
+
+	// Clearing it is how the feature is switched off from the dashboard.
+	params, problems = build(t, url.Values{"sing_along_channel": {""}})
+	if len(problems) > 0 {
+		t.Fatalf("unexpected problems: %v", problems)
+	}
+	if params.SingAlongChannel.Valid {
+		t.Error("an empty sing-along channel must clear the setting")
+	}
+
+	// A voice channel is not somewhere a lyric can be posted.
+	if _, problems := build(t, url.Values{"sing_along_channel": {"200"}}); len(problems) == 0 {
+		t.Error("a voice channel was accepted as the sing-along channel")
+	}
+}
+
+func TestBuildUpdateSingAlongCooldownBounds(t *testing.T) {
+	before := fixtureGuild()
+
+	for _, valid := range []string{"0", "10", "360"} {
+		params, problems := build(t, url.Values{singAlongCooldownKey: {valid}})
+		if len(problems) > 0 {
+			t.Errorf("cooldown %s was rejected: %v", valid, problems)
+		}
+		if got := strconv.Itoa(int(params.SingAlongCooldownMinutes)); got != valid {
+			t.Errorf("cooldown = %s, want %s", got, valid)
+		}
+	}
+
+	// 360 minutes is Discord's own slowmode ceiling of 21600 seconds; past it the
+	// value could not be applied even if it were stored.
+	for _, invalid := range []string{"-1", "361", "ten"} {
+		params, problems := build(t, url.Values{singAlongCooldownKey: {invalid}})
+		if len(problems) == 0 {
+			t.Errorf("cooldown %q was accepted", invalid)
+		}
+		if params.SingAlongCooldownMinutes != before.SingAlongCooldownMinutes {
+			t.Errorf("a rejected cooldown must leave the stored one alone, got %d",
+				params.SingAlongCooldownMinutes)
+		}
+	}
+}
+
+func TestBuildUpdateSingAlongTimezone(t *testing.T) {
+	params, problems := build(t, url.Values{"sing_along_timezone": {"Europe/Amsterdam"}})
+	if len(problems) > 0 {
+		t.Fatalf("unexpected problems: %v", problems)
+	}
+	if params.SingAlongTimezone != "Europe/Amsterdam" {
+		t.Errorf("SingAlongTimezone = %q", params.SingAlongTimezone)
+	}
+
+	// "Local" is what utils.ValidateTimezone exists to refuse: time.LoadLocation
+	// accepts it and binds it to whatever zone the log config set as time.Local,
+	// which is not a schedule anybody chose.
+	for _, invalid := range []string{"", "Local", "Mars/Olympus"} {
+		params, problems := build(t, url.Values{"sing_along_timezone": {invalid}})
+		if len(problems) == 0 {
+			t.Errorf("timezone %q was accepted", invalid)
+		}
+		if params.SingAlongTimezone != "Asia/Kolkata" {
+			t.Errorf("a rejected timezone must leave the stored one alone, got %q",
+				params.SingAlongTimezone)
+		}
+	}
+}
+
+func TestChangedFieldsReportsSingAlong(t *testing.T) {
+	before := fixtureGuild()
+
+	params, _ := build(t, url.Values{
+		"sing_along_channel":  {"101"},
+		"sing_along_hour":     {"20"},
+		"sing_along_timezone": {"Europe/Amsterdam"},
+		singAlongCooldownKey:  {"15"},
+	})
+
+	changed := changedFields(before, params)
+	want := map[string]bool{
+		"sing_along_channel":  true,
+		"sing_along_hour":     true,
+		"sing_along_timezone": true,
+		singAlongCooldownKey:  true,
+	}
+	if len(changed) != len(want) {
+		t.Fatalf("changed = %v, want the four sing-along fields", changed)
+	}
+	for _, field := range changed {
+		if !want[field] {
+			t.Errorf("unexpected changed field %q", field)
+		}
 	}
 }

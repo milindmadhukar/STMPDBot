@@ -77,7 +77,61 @@ const (
 
 	minXPMultiplier = 0.1
 	maxXPMultiplier = 5.0
+
+	// singAlongCooldownKey is the per-member wait between sing-along attempts. It
+	// is pushed to the channel's own slowmode rather than enforced by the bot, so
+	// the ceiling is Discord's: 21600 seconds, which is six hours.
+	singAlongCooldownKey = "sing_along_cooldown_minutes"
+
+	minSingAlongCooldown = 0
+	maxSingAlongCooldown = 360
 )
+
+// handleSingAlongReroll clears a guild's sing-along channel and starts a new song.
+//
+// The bot answers as soon as the round is stored, and clears the channel behind it,
+// so the banner says the song has changed rather than claiming the channel is
+// already empty. A refusal -- usually a missing permission -- is shown verbatim,
+// because it names the thing an admin has to go and fix.
+func (s *Server) handleSingAlongReroll(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	guildID := guildFrom(ctx)
+	sess, _ := sessionFrom(ctx)
+
+	guild, err := s.queries.GetGuild(ctx, int64(guildID))
+	if err != nil {
+		s.serverError(w, r, err)
+		return
+	}
+
+	p := s.newPage(r, "Settings")
+	p.Nav = "settings"
+	s.withGuild(r, p, guildID)
+
+	roll, err := s.bots.RerollSingAlong(ctx, guildID)
+	switch {
+	case errors.Is(err, ErrSingAlongRefused):
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		s.renderSettings(w, r, p, guild, strings.TrimPrefix(err.Error(), ErrSingAlongRefused.Error()+": "), nil)
+		return
+	case errors.Is(err, ErrBotAPIUnavailable):
+		p.Degraded = true
+		s.renderSettings(w, r, p, guild,
+			"The bot is unreachable, so the sing-along could not be re-rolled.", nil)
+		return
+	case err != nil:
+		s.serverError(w, r, err)
+		return
+	}
+
+	slog.Info("Dashboard sing-along re-rolled",
+		slog.String("guild_id", guildID.String()),
+		slog.String("user_id", sess.UserID.String()),
+		slog.String("song", roll.Song))
+
+	s.renderSettingsWithNotice(w, r, p, guild, "",
+		fmt.Sprintf("Re-rolled to %s — the channel is being cleared now.", roll.Song), nil)
+}
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -174,6 +228,12 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 // holds, so a save always re-renders the stored truth rather than the submitted
 // form.
 func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, p *pageData, guild db.Guild, problem string, saved []string) {
+	s.renderSettingsWithNotice(w, r, p, guild, problem, "", saved)
+}
+
+// renderSettingsWithNotice is renderSettings plus a one-off message that is not a
+// list of changed fields -- what the re-roll button has to say for itself.
+func (s *Server) renderSettingsWithNotice(w http.ResponseWriter, r *http.Request, p *pageData, guild db.Guild, problem, notice string, saved []string) {
 	ctx := r.Context()
 	guildID := guildFrom(ctx)
 
@@ -265,6 +325,14 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, p *pageD
 			},
 		},
 		{
+			ID:    "singalong",
+			Title: "Sing-along",
+			Help:  "The bot drops a Martin Garrix lyric here each day and members sing the next line for coins. The channel is wiped clean before every new song, so do not point this at a channel holding anything worth keeping.",
+			Settings: []setting{
+				build("sing_along_channel", "Sing-along channel", "The daily lyric is posted here, and everything in the channel is deleted when the next one drops.", kindTextChannel, guild.SingAlongChannel, false),
+			},
+		},
+		{
 			ID:    "inert",
 			Title: "Not wired up yet",
 			Help:  "These are stored, but no bot feature reads them today. Setting one has no effect until the corresponding feature is built.",
@@ -290,7 +358,18 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, p *pageD
 			"Timezone": guild.AnniversaryTimezone,
 			"Hours":    hourChoices(guild.AnniversaryHour),
 		},
+		"SingAlong": map[string]any{
+			"Hour":        guild.SingAlongHour,
+			"Timezone":    guild.SingAlongTimezone,
+			"Hours":       hourChoices(guild.SingAlongHour),
+			"CooldownKey": singAlongCooldownKey,
+			"Cooldown":    guild.SingAlongCooldownMinutes,
+			"CooldownMin": minSingAlongCooldown,
+			"CooldownMax": maxSingAlongCooldown,
+			"Configured":  guild.SingAlongChannel.Valid,
+		},
 		"Problem": problem,
+		"Notice":  notice,
 		"Saved":   saved,
 	}
 	s.render(w, r, "settings", "settings-form", p)

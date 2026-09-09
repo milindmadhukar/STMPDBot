@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"regexp"
 	"strings"
 	"time"
 
@@ -203,23 +202,17 @@ func filterValidLines(lines []string, answers []string, need int) []string {
 	return last
 }
 
-// lrcTimestampPrefix matches leading LRC-style timestamp tags such as "[02:14.11]",
-// including the run of several a synced line can carry ("[00:12.00][00:45.00]text").
+// dropGiveaways removes lines that are too short to be a clue, and lines naming any
+// of the given titles.
 //
-// songs.lyrics is meant to hold plain, untimed lyrics -- see utils/lrclib.go -- but a
-// few rows were pasted by hand from a synced source and kept their tags. A line that is
-// nothing but a tag, like an instrumental break marker, has no lyric content once the
-// tag is gone and must not be judged on the length of the timestamp instead.
-var lrcTimestampPrefix = regexp.MustCompile(`^(?:\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]\s*)+`)
-
-// dropGiveaways removes lines that are too short to be a clue, and lines naming any of
-// the given titles.
+// The trimming, the LRC tag stripping and the length rule live in
+// utils.CleanLyricLine, because the sing-along needs exactly the same notion of what
+// a lyric line is; what stays here is the part that is only about quizzing.
 func dropGiveaways(lines []string, titles []string) []string {
 	var kept []string
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		content := lrcTimestampPrefix.ReplaceAllString(line, "")
-		if len(content) < 5 {
+		content, ok := utils.CleanLyricLine(line)
+		if !ok {
 			continue
 		}
 		if namesATitle(content, titles) {

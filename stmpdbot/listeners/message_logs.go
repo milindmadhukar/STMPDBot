@@ -18,8 +18,8 @@ import (
 
 func MessageDeleteListener(b *stmpdbot.STMPDBot) bot.EventListener {
 	return bot.NewListenerFunc(func(e *events.GuildMessageDelete) {
-		// Get guild configuration for log channel
-		config, err := b.Queries.GetDeleteLogsChannel(context.Background(), int64(e.GuildID))
+		// Where to log, and which channel to stay out of, in one round trip.
+		config, err := b.Queries.GetDeleteLogRouting(context.Background(), int64(e.GuildID))
 		if err != nil {
 			// If guild config doesn't exist, silently skip logging
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -29,11 +29,19 @@ func MessageDeleteListener(b *stmpdbot.STMPDBot) bot.EventListener {
 			return
 		}
 
-		if !config.Valid || config.Int64 == 0 {
+		if !config.DeleteLogsChannel.Valid || config.DeleteLogsChannel.Int64 == 0 {
 			return
 		}
 
-		channelID := snowflake.ID(config.Int64)
+		// The sing-along deletes a wrong guess on every attempt and empties its
+		// channel once a day, and disgo fans MESSAGE_DELETE_BULK out into one event
+		// per message -- so without this a single daily wipe would post several
+		// hundred "Message Deleted" embeds into the moderation log.
+		if config.SingAlongChannel.Valid && int64(e.ChannelID) == config.SingAlongChannel.Int64 {
+			return
+		}
+
+		channelID := snowflake.ID(config.DeleteLogsChannel.Int64)
 
 		// Build embed based on whether message was cached
 		embedBuilder := discord.NewEmbed().

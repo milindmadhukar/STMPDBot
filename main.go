@@ -135,6 +135,10 @@ func main() {
 		listeners.VoiceLogLeaveListener(b),
 		listeners.VoiceLogMoveListener(b),
 		listeners.GuildMemberProfileListener(b),
+		// Registered after MessageCreateListener, which is what creates a member's
+		// users row -- disgo dispatches listeners in order, so by the time a
+		// sing-along award runs the row it pays into exists.
+		listeners.SingAlongListener(b),
 	); err != nil {
 		slog.Error("Failed to setup bot", slog.Any("err", err))
 		os.Exit(-1)
@@ -202,6 +206,14 @@ func main() {
 				// this is only how often that gets checked. The 5 minute poll is
 				// also what lets a restart pick up a window it slept through.
 				go handlers.GetSongAnniversaries(b, time.NewTicker(5*time.Minute))
+
+				// Same shape and the same five minute poll as the anniversaries, and
+				// for the same reasons: the schedule is each guild's own local hour,
+				// and the poll is what lets a restart pick up a window it slept
+				// through. It also reconciles the channel's slowmode with the
+				// configured cooldown, which is how a dashboard edit reaches Discord.
+				b.SingAlongReroll = handlers.RerollSingAlong(b)
+				go handlers.RunSingAlong(b, time.NewTicker(5*time.Minute))
 
 				// Repairs derived state that has drifted from what the current rules
 				// produce -- rekey-songs and link-remix-parents, as a ticker.

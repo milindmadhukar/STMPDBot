@@ -102,6 +102,9 @@ func (s *Server) routes() http.Handler {
 	// requireCSRF composes INSIDE guildScoped: it reads the session that
 	// authed installs on the request context.
 	mux.Handle("POST /g/{guildID}/settings", s.guildScoped(s.requireCSRF(s.handleSettingsSave)))
+	// Not a settings save: it asks the bot to wipe a channel and start a new song,
+	// so it goes to the bot rather than to the guilds table.
+	mux.Handle("POST /g/{guildID}/settings/singalong/reroll", s.guildScoped(s.requireCSRF(s.handleSingAlongReroll)))
 	mux.Handle("GET /g/{guildID}/backgrounds", s.guildScoped(s.handleBackgrounds))
 	mux.Handle("POST /g/{guildID}/backgrounds", s.guildScoped(s.requireCSRF(s.handleBackgroundsSave)))
 
