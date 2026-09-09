@@ -1,11 +1,13 @@
 package utils
 
 const (
-	ColorError      = 0xFF0000
-	ColorDanger     = 0xFF0000
-	ColorSuccess    = 0x5c5fea
-	ColorWarning    = 0xFFA500
-	ColorInfo       = 0x3498db
+	ColorError   = 0xFF0000
+	ColorDanger  = 0xFF0000
+	ColorSuccess = 0x5c5fea
+	ColorWarning = 0xFFA500
+	ColorInfo    = 0x3498db
+	// TickEmoji carries a trailing space; CrossEmoji does not. Existing callers
+	// depend on both, so use them rather than pasting the mention in by hand.
 	TickEmoji       = "<a:tick:810462879374770186> "
 	CrossEmoji      = "<a:cross:810462920810561556>"
 	YoutubeEmoji    = "<:youtube:1328049285123674264>"
@@ -46,4 +48,11 @@ const (
 	RankLabelFontSize   = 22
 	RankNumberFontSize  = 50
 	RankUsernameMaxSize = 36
+)
+
+// The two marks in the form the reaction endpoints take, derived from the mentions
+// above so the ids live in exactly one place.
+var (
+	TickReaction  = ReactionEmoji(TickEmoji)
+	CrossReaction = ReactionEmoji(CrossEmoji)
 )

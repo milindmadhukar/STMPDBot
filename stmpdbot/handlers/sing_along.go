@@ -22,14 +22,6 @@ import (
 	"github.com/milindmadhukar/STMPDBot/utils"
 )
 
-// The marks the listener puts on an attempt. Plain unicode rather than the animated
-// custom emoji the quiz embeds use: a reaction has to resolve to an emoji this guild
-// can actually use, and the bot runs in servers that do not have those.
-const (
-	SingAlongTick  = "✅"
-	SingAlongCross = "❌"
-)
-
 // singAlongRollAttempts is how many songs to try before giving up on a round.
 //
 // GetRandomSongWithLyricsEasy already excludes instrumentals and rows without

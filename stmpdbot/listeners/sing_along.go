@@ -59,7 +59,7 @@ func SingAlongListener(b *stmpdbot.STMPDBot) bot.EventListener {
 			// message that simply disappears reads as the bot being broken; a cross
 			// says it was read and judged, and the five seconds are enough to see it.
 			go func() {
-				if err := b.Client.Rest.AddReaction(e.ChannelID, e.Message.ID, handlers.SingAlongCross); err != nil {
+				if err := b.Client.Rest.AddReaction(e.ChannelID, e.Message.ID, utils.CrossReaction); err != nil {
 					slog.Debug("Could not mark a wrong sing-along answer",
 						slog.String("message_id", e.Message.ID.String()),
 						slog.Any("err", err))
@@ -110,12 +110,12 @@ func awardSingAlongLine(b *stmpdbot.STMPDBot, e *events.MessageCreate, round uti
 
 	awardSingAlongCoins(ctx, b, int64(e.Message.Author.ID), int64(*e.GuildID))
 
-	if err := b.Client.Rest.AddReaction(e.ChannelID, e.Message.ID, handlers.SingAlongTick); err != nil {
+	if err := b.Client.Rest.AddReaction(e.ChannelID, e.Message.ID, utils.TickReaction); err != nil {
 		slog.Debug("Could not mark a correct sing-along answer",
 			slog.String("message_id", e.Message.ID.String()),
 			slog.Any("err", err))
 	} else if err := b.Client.Rest.RemoveOwnReaction(e.ChannelID, e.Message.ID,
-		handlers.SingAlongTick, rest.WithDelay(singAlongMarkHold)); err != nil {
+		utils.TickReaction, rest.WithDelay(singAlongMarkHold)); err != nil {
 		slog.Debug("Could not clear a sing-along tick",
 			slog.String("message_id", e.Message.ID.String()),
 			slog.Any("err", err))

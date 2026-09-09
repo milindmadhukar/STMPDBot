@@ -121,13 +121,13 @@ func QuizHandler(b *stmpdbot.STMPDBot) handler.CommandHandler {
 					}
 
 					followUpResponseEmbed = discord.NewEmbed().
-						WithTitle(fmt.Sprintf("<a:tick:810462879374770186> Your guess is correct and you earned %d coins.", earnings)).
+						WithTitle(fmt.Sprintf("%sYour guess is correct and you earned %d coins.", utils.TickEmoji, earnings)).
 						WithColor(utils.ColorSuccess).
 						AddField("Song Name", fmt.Sprintf("%s - %s", song.Artists, song.Name), false).
 						WithThumbnail(song.ThumbnailUrl.String)
 				} else {
 					followUpResponseEmbed = discord.NewEmbed().
-						WithTitle("<a:cross:810462920810561556> Your guess is incorrect").
+						WithTitle(utils.CrossEmoji+" Your guess is incorrect").
 						WithColor(utils.ColorError).
 						AddField("Song Name", fmt.Sprintf("%s - %s", song.Artists, song.Name), false).
 						WithThumbnail(song.ThumbnailUrl.String)
@@ -151,7 +151,7 @@ func QuizHandler(b *stmpdbot.STMPDBot) handler.CommandHandler {
 
 			bot.WaitForEvent(b.Client, ctx, filterAuthorMessagesFunc, answerCheckFunc, func() {
 				timerExpiredEmbed := discord.NewEmbed().
-					WithTitle("<a:cross:810462920810561556> Oops, you ran out of time").
+					WithTitle(utils.CrossEmoji+" Oops, you ran out of time").
 					WithColor(utils.ColorError).
 					AddField("Song Name", fmt.Sprintf("%s - %s", song.Artists, song.Name), false).
 					WithThumbnail(song.ThumbnailUrl.String)
