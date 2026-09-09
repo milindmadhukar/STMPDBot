@@ -255,9 +255,7 @@ func classify(ctx context.Context, llm *ai.Client, memories []memory) []string {
 				slog.Warn("Classification batch failed", slog.Any("err", err))
 				return
 			}
-			for _, f := range parseFacts(reply.Content) {
-				facts = append(facts, f)
-			}
+			facts = append(facts, parseFacts(reply.Content)...)
 		}(b)
 	}
 	wg.Wait()
