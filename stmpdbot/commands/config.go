@@ -410,7 +410,9 @@ func handleSetSingAlongChannel(b *stmpdbot.STMPDBot, e *handler.CommandEvent) er
 		// thing about this feature somebody could be surprised by.
 		AddField("Careful",
 			"Every message in that channel is deleted each time a new song drops. "+
-				"Do not point this at a channel holding anything worth keeping.", false).
+				"Do not point this at a channel holding anything worth keeping. Anything "+
+				"already older than two weeks is left alone -- Discord has no bulk delete "+
+				"for it -- so a channel of its own works best.", false).
 		WithColor(utils.ColorSuccess)
 
 	if config, err := b.Queries.GetGuild(e.Ctx, int64(guildID)); err == nil {

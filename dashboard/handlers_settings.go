@@ -327,9 +327,9 @@ func (s *Server) renderSettingsWithNotice(w http.ResponseWriter, r *http.Request
 		{
 			ID:    "singalong",
 			Title: "Sing-along",
-			Help:  "The bot drops a Martin Garrix lyric here each day and members sing the next line for coins. The channel is wiped clean before every new song, so do not point this at a channel holding anything worth keeping.",
+			Help:  "The bot drops a Martin Garrix lyric here each day and members sing the next line for coins. The channel is wiped clean before every new song, so do not point this at a channel holding anything worth keeping. Anything already older than two weeks is left alone: Discord has no bulk delete for it, and clearing it one message at a time is slower than it is worth.",
 			Settings: []setting{
-				build("sing_along_channel", "Sing-along channel", "The daily lyric is posted here, and everything in the channel is deleted when the next one drops.", kindTextChannel, guild.SingAlongChannel, false),
+				build("sing_along_channel", "Sing-along channel", "The daily lyric is posted here, and the channel is emptied when the next one drops. Best pointed at a channel of its own.", kindTextChannel, guild.SingAlongChannel, false),
 			},
 		},
 		{

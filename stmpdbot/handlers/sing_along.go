@@ -351,12 +351,20 @@ func openSingAlongChannel(b *stmpdbot.STMPDBot, round utils.SingAlongRound) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
-	deleted, err := wipeChannel(ctx, b, round.ChannelID)
+	deleted, skipped, err := wipeChannel(ctx, b, round.ChannelID)
 	if err != nil {
 		slog.Error("Failed to fully wipe the sing-along channel",
 			slog.Int64("guild_id", int64(round.GuildID)),
 			slog.Int("deleted", deleted),
 			slog.Any("err", err))
+	}
+	// Only ever a backlog that predates the feature: once a channel has been through
+	// one daily cycle nothing in it is old enough to be skipped.
+	if skipped > 0 {
+		slog.Warn("Left messages too old for Discord to bulk delete",
+			slog.Int64("guild_id", int64(round.GuildID)),
+			slog.String("channel_id", round.ChannelID.String()),
+			slog.Int("skipped", skipped))
 	}
 
 	b.SingAlong.Set(round)
@@ -374,7 +382,8 @@ func openSingAlongChannel(b *stmpdbot.STMPDBot, round utils.SingAlongRound) {
 		slog.Int64("song_id", round.Song.ID),
 		slog.String("song", utils.SongHeading(round.Song.Artists, round.Song.Name, round.Song.MixName.String)),
 		slog.Int("lines", len(round.Lines)),
-		slog.Int("wiped", deleted))
+		slog.Int("wiped", deleted),
+		slog.Int("left", skipped))
 }
 
 // rollSingAlongSong picks a Martin Garrix song with enough singable lines.
@@ -513,66 +522,59 @@ func syncSlowmode(b *stmpdbot.STMPDBot, channelID snowflake.ID, minutes int) err
 	return nil
 }
 
-// wipeChannel deletes every message in the channel and reports how many went.
+// wipeChannel empties the channel and reports what it removed and what it could not.
 //
-// Bulk delete is the fast path but Discord refuses it for anything older than two
-// weeks, and one old message in a batch rejects the whole call -- so a batch that
-// comes back with code 50034 is retried one message at a time. In steady state the
-// channel holds a single day of chat and that never happens; it is the first run
-// against an existing channel that needs it.
-func wipeChannel(ctx context.Context, b *stmpdbot.STMPDBot, channelID snowflake.ID) (int, error) {
-	deleted := 0
-
+// Only messages inside Discord's two-week bulk window are touched. Older ones are
+// counted and left, because there is no bulk endpoint for them: clearing them means
+// one heavily rate-limited call per message, which took over a minute per hundred,
+// looked broken to everyone watching the channel, and still hit the page cap without
+// finishing.
+//
+// That costs nothing in the steady state this feature actually runs in. The channel
+// is emptied every day, so nothing in it is ever more than a day old and "everything
+// bulk-deletable" and "everything" are the same set. What survives is only a backlog
+// that predates the feature being pointed at the channel.
+func wipeChannel(ctx context.Context, b *stmpdbot.STMPDBot, channelID snowflake.ID) (deleted, skipped int, err error) {
 	for page := 0; page < singAlongWipePages; page++ {
 		if err := ctx.Err(); err != nil {
-			return deleted, err
+			return deleted, skipped, err
 		}
 
+		// Always the newest hundred: the ones just deleted are gone, so this walks
+		// the channel backwards without needing a cursor.
 		messages, err := b.Client.Rest.GetMessages(channelID, 0, 0, 0, 100)
 		if err != nil {
-			return deleted, fmt.Errorf("failed to read messages to wipe: %w", err)
+			return deleted, skipped, fmt.Errorf("failed to read messages to wipe: %w", err)
 		}
 		if len(messages) == 0 {
-			return deleted, nil
+			return deleted, skipped, nil
 		}
 
-		// Split on Discord's two-week rule BEFORE calling anything, rather than
-		// finding out from a rejection.
-		//
-		// One message over the line rejects the WHOLE bulk call, so reacting to the
-		// error meant a single ancient message dragged the other ninety-nine down
-		// the one-at-a-time path with it. In a channel with any history at all --
-		// exactly the case this runs in the first time it is pointed somewhere --
-		// every page looks like that, and a wipe that should be one API call became
-		// a hundred, visibly deleting messages one by one for minutes.
 		fresh, stale := splitOnBulkDeleteAge(messages, time.Now())
+
+		// Everything still visible is beyond the bulk window, so no further page can
+		// contain anything this is willing to delete.
+		if len(fresh) == 0 {
+			return deleted, skipped + len(stale), nil
+		}
 
 		gone, err := bulkDelete(b, channelID, fresh)
 		deleted += gone
 		if err != nil {
-			return deleted, err
+			return deleted, skipped, err
 		}
-
-		// Only the genuinely old ones go the slow way, and only they pay for the
-		// pacing that Discord's much tighter limit on old deletions needs.
-		gone, err = deleteMessagesIndividually(ctx, b, channelID, stale)
-		deleted += gone
-		if err != nil {
-			return deleted, err
-		}
-
-		// Nothing on this page could be removed -- a system message, or a permission
-		// lost mid-wipe. Re-reading the same page until the cap only wastes the rate
-		// limit.
-		if len(fresh)+len(stale) == 0 || (gone == 0 && len(fresh) == 0) {
-			return deleted, nil
+		// Nothing went, despite messages being in range -- a permission lost
+		// mid-wipe, or a message Discord will not bulk delete. Re-reading the same
+		// page until the cap only wastes the rate limit.
+		if gone == 0 {
+			return deleted, skipped, nil
 		}
 	}
 
 	slog.Warn("Stopped wiping the sing-along channel at the page cap",
 		slog.String("channel_id", channelID.String()),
 		slog.Int("deleted", deleted))
-	return deleted, nil
+	return deleted, skipped, nil
 }
 
 // bulkDeleteMaxAge is Discord's limit on what its bulk endpoint will accept. The
@@ -581,8 +583,8 @@ func wipeChannel(ctx context.Context, b *stmpdbot.STMPDBot, channelID snowflake.
 const bulkDeleteMaxAge = 14*24*time.Hour - time.Hour
 
 // splitOnBulkDeleteAge divides a page into what can be deleted in one call and what
-// has to go one at a time. A message's age comes from its snowflake, so this costs
-// nothing and needs no extra field from the API.
+// cannot be deleted quickly at all. A message's age comes from its snowflake, so this
+// costs nothing and needs no extra field from the API.
 func splitOnBulkDeleteAge(messages []discord.Message, now time.Time) (fresh, stale []snowflake.ID) {
 	for _, message := range messages {
 		if now.Sub(message.ID.Time()) < bulkDeleteMaxAge {
@@ -594,8 +596,8 @@ func splitOnBulkDeleteAge(messages []discord.Message, now time.Time) (fresh, sta
 	return fresh, stale
 }
 
-// bulkDelete removes a batch in one call, falling back for the sizes and the ages
-// Discord's bulk endpoint will not take.
+// bulkDelete removes a batch in one call, falling back only for the size Discord's
+// bulk endpoint will not take.
 func bulkDelete(b *stmpdbot.STMPDBot, channelID snowflake.ID, ids []snowflake.ID) (int, error) {
 	switch len(ids) {
 	case 0:
@@ -619,31 +621,4 @@ func bulkDelete(b *stmpdbot.STMPDBot, channelID snowflake.ID, ids []snowflake.ID
 		return 0, fmt.Errorf("failed to bulk delete messages: %w", err)
 	}
 	return len(ids), nil
-}
-
-// deleteMessagesIndividually is the slow path for messages Discord will not bulk
-// delete, paced so a backlog does not spend the channel's whole rate limit at once.
-func deleteMessagesIndividually(
-	ctx context.Context,
-	b *stmpdbot.STMPDBot,
-	channelID snowflake.ID,
-	ids []snowflake.ID,
-) (int, error) {
-	deleted := 0
-	for _, id := range ids {
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-		if err := b.Client.Rest.DeleteMessage(channelID, id); err != nil {
-			// A message someone else already removed is not a failure worth
-			// abandoning the wipe over.
-			slog.Debug("Could not delete a message during a sing-along wipe",
-				slog.String("message_id", id.String()),
-				slog.Any("err", err))
-			continue
-		}
-		deleted++
-		time.Sleep(time.Second)
-	}
-	return deleted, nil
 }
