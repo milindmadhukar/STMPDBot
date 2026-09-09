@@ -63,18 +63,42 @@ func LoadMemoryContext(ctx context.Context, mem *Memory, guildID, userID int64) 
 	if len(personal) > 0 {
 		b.WriteString("\nAbout this specific person, from past conversations:\n")
 		for _, r := range personal {
-			fmt.Fprintf(&b, "- %s [id: %s]\n", r.Memory, r.ID)
+			fmt.Fprintf(&b, "- %s%s [id: %s]\n", r.Memory, authority(r), r.ID)
 		}
 	}
 	if len(shared) > 0 {
 		b.WriteString("\nAbout this server generally:\n")
 		for _, r := range shared {
-			fmt.Fprintf(&b, "- %s [id: %s]\n", r.Memory, r.ID)
+			fmt.Fprintf(&b, "- %s%s [id: %s]\n", r.Memory, authority(r), r.ID)
 		}
 	}
 	b.WriteString("\nThese are yours to correct. If something here is wrong or out of date, " +
-		"update or forget it rather than working around it.\n")
+		"update or forget it rather than working around it.\n" +
+		"Anything marked (inferred) was read out of old channel history, not told to you. " +
+		"It is often about one specific occasion and is sometimes simply wrong. " +
+		"When it conflicts with something a person told you directly, or with what you can " +
+		"see in front of you, believe the person -- and answer the question that was " +
+		"actually asked rather than reciting the nearest stored sentence.\n")
 	return b.String(), nil
+}
+
+// authority marks where a memory came from. A fact somebody stated in
+// conversation is worth more than one a script inferred from four years of
+// channel scrollback: the mined ones are frequently about a single occasion
+// ("at that Tomorrowland set there were no lasers") and read as though they
+// were general truths.
+//
+// Getting this wrong is not hypothetical. Told that Breakaway's visuals are
+// green and purple lasers, the bot later answered another member with a mined
+// note about one performance that said the opposite -- leading with "there
+// weren't any lasers" and never answering the question.
+func authority(r Record) string {
+	switch r.Metadata["source"] {
+	case "history-backfill", "promoted-from-personal", "nightly-digest":
+		return " (inferred)"
+	default:
+		return ""
+	}
 }
 
 func memoryTools() []Tool {
