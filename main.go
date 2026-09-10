@@ -149,6 +149,9 @@ func main() {
 	// caches) rather than refused.
 	b.StartInternalAPI()
 
+	// Before the fetchers below start, which is the only thing that uses it.
+	b.SetupReddit()
+
 	// Setup Beatport client
 	if err = b.SetupBeatport(); err != nil {
 		slog.Warn("Failed to setup Beatport client - beatport features will be disabled", slog.Any("err", err))

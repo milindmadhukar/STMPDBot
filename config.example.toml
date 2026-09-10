@@ -27,6 +27,18 @@ token = "your_token_here"
 yt_api_key = "yt_api_key_here"
 # google service json file path
 google_service_file = "/path/to/servicefile.json"
+# reddit script app credentials and the account it runs as
+reddit_client_id = ""
+reddit_client_secret = ""
+reddit_bot_username = ""
+reddit_bot_password = ""
+# Optional proxy for Reddit's traffic, and only Reddit's: every other source
+# still goes out directly. Leave empty to fetch Reddit directly as well.
+# Accepts http://, https://, socks5:// and socks5h:// URLs. Under the limitless
+# compose stack this is the home-network exit node, which the bot reaches by
+# joining the tailscale-raspberrypi network:
+#   reddit_proxy = "http://tailscale-raspberrypi:1080"
+reddit_proxy = ""
 # beatport credentials
 beatport_username = ""
 beatport_password = ""

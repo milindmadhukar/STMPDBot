@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -50,7 +51,10 @@ type STMPDBot struct {
 	Queries        *db.Queries
 	YoutubeService *youtube.Service
 
-	RedditToken    utils.RedditToken
+	RedditToken utils.RedditToken
+	// RedditClient carries every Reddit call, and goes through bot.reddit_proxy
+	// when one is set. See SetupReddit.
+	RedditClient   *http.Client
 	RadioManager   *utils.RadioManager
 	BeatportClient *utils.BeatportClient
 	// AgentClient is nil unless the AI persona feature is configured and
@@ -268,6 +272,29 @@ func (b *STMPDBot) SetupBeatport() error {
 		slog.Int("artist_count", len(config.ArtistIDs)),
 		slog.Int("max_tracks", maxTracks))
 	return nil
+}
+
+// redditTimeout bounds every Reddit call. The fetcher loop is the only thing
+// driving these requests, so a hung connection with no timeout would stall
+// Reddit notifications indefinitely.
+const redditTimeout = 30 * time.Second
+
+// SetupReddit builds the client every Reddit call goes through. With
+// bot.reddit_proxy set, Reddit is the only source that leaves through it;
+// without one it is fetched directly, like everything else.
+//
+// A proxy that cannot be used is logged and skipped rather than disabling
+// Reddit: the direct route is how it ran before the option existed, and a
+// typo in the config should cost the proxy, not the notifications.
+func (b *STMPDBot) SetupReddit() {
+	client, err := utils.NewHTTPClient(redditTimeout, b.Cfg.Bot.RedditProxy)
+	if err != nil {
+		slog.Error("Unusable bot.reddit_proxy, fetching Reddit directly instead", slog.Any("err", err))
+		client, _ = utils.NewHTTPClient(redditTimeout, "")
+	}
+
+	b.RedditClient = client
+	slog.Info("Reddit client initialized", slog.Bool("via_proxy", client.Transport != nil))
 }
 
 // SetupLLM points the bot at the standalone AI persona service (cmd/agent).

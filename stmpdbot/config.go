@@ -223,17 +223,20 @@ type BotConfig struct {
 	// "youtube_api_key" while config.toml, config.example.toml and the deployed
 	// config.docker.toml all write "yt_api_key", so this field was empty in
 	// production and the YouTube service ran on the service-account file alone.
-	YoutubeAPIKey      string   `toml:"yt_api_key"`
-	GoogleServiceFile  string   `toml:"google_service_file"`
-	RedditClientID     string   `toml:"reddit_client_id"`
-	RedditClientSecret string   `toml:"reddit_client_secret"`
-	RedditBotUsername  string   `toml:"reddit_bot_username"`
-	RedditBotPassword  string   `toml:"reddit_bot_password"`
-	BeatportUsername   string   `toml:"beatport_username"`
-	BeatportPassword   string   `toml:"beatport_password"`
-	BeatportLabelID    string   `toml:"beatport_label_id"`
-	BeatportArtistIDs  []string `toml:"beatport_artist_ids"`
-	BeatportMaxTracks  int      `toml:"beatport_max_tracks"`
+	YoutubeAPIKey      string `toml:"yt_api_key"`
+	GoogleServiceFile  string `toml:"google_service_file"`
+	RedditClientID     string `toml:"reddit_client_id"`
+	RedditClientSecret string `toml:"reddit_client_secret"`
+	RedditBotUsername  string `toml:"reddit_bot_username"`
+	RedditBotPassword  string `toml:"reddit_bot_password"`
+	// RedditProxy routes Reddit's traffic, and only Reddit's, through a proxy,
+	// e.g. "http://tailscale-raspberrypi:1080". Empty fetches Reddit directly.
+	RedditProxy       string   `toml:"reddit_proxy"`
+	BeatportUsername  string   `toml:"beatport_username"`
+	BeatportPassword  string   `toml:"beatport_password"`
+	BeatportLabelID   string   `toml:"beatport_label_id"`
+	BeatportArtistIDs []string `toml:"beatport_artist_ids"`
+	BeatportMaxTracks int      `toml:"beatport_max_tracks"`
 }
 
 type LogConfig struct {

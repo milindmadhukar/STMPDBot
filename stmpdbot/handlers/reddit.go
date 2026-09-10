@@ -27,7 +27,12 @@ func AuthenticateReddit(b *stmpdbot.STMPDBot) error {
 	data.Set("username", b.Cfg.Bot.RedditBotUsername)
 	data.Set("password", b.Cfg.Bot.RedditBotPassword)
 
-	req, err := http.NewRequest("POST", "https://www.reddit.com/api/v1/access_token", strings.NewReader(data.Encode()))
+	// Tighter than the client's own timeout: a token request is small, and a
+	// slow one should give the cycle back rather than eat most of it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://www.reddit.com/api/v1/access_token", strings.NewReader(data.Encode()))
 	if err != nil {
 		return fmt.Errorf("failed to create reddit auth request: %w", err)
 	}
@@ -35,8 +40,7 @@ func AuthenticateReddit(b *stmpdbot.STMPDBot) error {
 	req.Header.Set("User-Agent", redditUserAgent(b))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := b.RedditClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to make request: %w", err)
 	}
@@ -64,11 +68,6 @@ func AuthenticateReddit(b *stmpdbot.STMPDBot) error {
 
 	return nil
 }
-
-// redditClient bounds every API call. The fetcher loop is the only thing driving
-// these requests, so a hung connection on http.DefaultClient (which has no
-// timeout) would stall Reddit notifications indefinitely.
-var redditClient = &http.Client{Timeout: 30 * time.Second}
 
 // redditTokenRefreshMargin re-authenticates slightly ahead of the advertised
 // expiry so a cycle can never start with a token that dies mid-request.
@@ -119,7 +118,7 @@ func runRedditCycle(b *stmpdbot.STMPDBot, endpoint string) error {
 	req.Header.Set("User-Agent", redditUserAgent(b))
 	req.Header.Set("Authorization", "bearer "+b.RedditToken.AccessToken)
 
-	resp, err := redditClient.Do(req)
+	resp, err := b.RedditClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to fetch reddit posts: %w", err)
 	}
