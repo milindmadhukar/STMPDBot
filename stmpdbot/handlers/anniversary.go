@@ -58,20 +58,26 @@ func anniversaryMonthDays(today time.Time) []string {
 // The year count is written out as literal text rather than left to <t:...:R>.
 // Discord's relative timestamp rounds, and a post that goes out at 09:00 local is a
 // few hours short of the exact anniversary of a noon-UTC anchor, which is enough for
-// it to render "2 years ago" on a song's third birthday. The relative stamp is kept
-// beside it because it reads well; the number that has to be right is ours.
+// it to render "2 years ago" on a song's third birthday.
+//
+// So <t:...:R> is not printed at all. It used to sit beside the literal count as a
+// flourish, which made every line say the number twice ("**9 years** ago today,
+// September 22, 2017 (9 years ago)") and, on exactly the boundary this function
+// exists to get right, say it twice differently -- "**3 years** ago today, September
+// 22, 2023 (2 years ago)". A stamp documented as unreliable has no business rendering
+// next to the one that is correct. Only the absolute date goes out, and that is exact.
 func anniversaryLine(song db.Song, years int32, ts int64) string {
 	title := fmt.Sprintf("**%s - %s**", song.Artists, song.Name)
 
 	switch years {
 	case 1:
-		return fmt.Sprintf("🎂 %s turns **1 year old** today! Released <t:%d:D> (<t:%d:R>)", title, ts, ts)
+		return fmt.Sprintf("🎂 %s turns **1 year old** today! Released <t:%d:D>", title, ts)
 	case 5:
-		return fmt.Sprintf("🎉 %s - **5 YEARS** today! Released <t:%d:D> (<t:%d:R>)", title, ts, ts)
+		return fmt.Sprintf("🎉 %s - **5 YEARS** today! Released <t:%d:D>", title, ts)
 	case 10:
-		return fmt.Sprintf("🏆 %s - **A DECADE** today! Released <t:%d:D> (<t:%d:R>)", title, ts, ts)
+		return fmt.Sprintf("🏆 %s - **A DECADE** today! Released <t:%d:D>", title, ts)
 	default:
-		return fmt.Sprintf("🎵 %s - **%d years** ago today, <t:%d:D> (<t:%d:R>)", title, years, ts, ts)
+		return fmt.Sprintf("🎵 %s - **%d years** ago today, <t:%d:D>", title, years, ts)
 	}
 }
 

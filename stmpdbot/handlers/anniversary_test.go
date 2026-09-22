@@ -94,13 +94,14 @@ func TestAnniversaryLine(t *testing.T) {
 			t.Errorf("years=%d: line %q does not contain %q", tt.years, line, tt.wantText)
 		}
 
-		// Both timestamp forms must survive every branch -- the absolute date is
-		// what the user asked for and the relative one is the flourish beside it.
+		// The absolute date survives every branch; it is exact.
 		if !strings.Contains(line, "<t:1371470400:D>") {
 			t.Errorf("years=%d: line %q is missing the absolute timestamp", tt.years, line)
 		}
-		if !strings.Contains(line, "<t:1371470400:R>") {
-			t.Errorf("years=%d: line %q is missing the relative timestamp", tt.years, line)
+		// The relative one never appears. It rounds, so beside the literal count it
+		// either repeats the number or contradicts it.
+		if strings.Contains(line, "<t:1371470400:R>") {
+			t.Errorf("years=%d: line %q still renders the rounding relative timestamp", tt.years, line)
 		}
 		if !strings.Contains(line, "Martin Garrix - Animals") {
 			t.Errorf("years=%d: line %q is missing the song", tt.years, line)
