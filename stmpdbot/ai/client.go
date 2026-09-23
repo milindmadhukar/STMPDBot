@@ -168,6 +168,10 @@ type chatRequest struct {
 	Messages  []Message `json:"messages"`
 	Tools     []Tool    `json:"tools,omitempty"`
 	MaxTokens int       `json:"max_tokens,omitempty"`
+	// Stream is always false, but must be sent: 9router treats an absent
+	// field as a streaming request on some upstreams and appends an SSE
+	// "data: [DONE]" after the JSON body.
+	Stream bool `json:"stream"`
 }
 
 type chatResponse struct {
@@ -214,8 +218,10 @@ func (c *Client) ChatCompletion(ctx context.Context, messages []Message, tools [
 		return Message{}, fmt.Errorf("ai: chat completion returned status %d: %s", resp.StatusCode, string(data))
 	}
 
+	// Decode only the first JSON value, so trailing SSE framing from the
+	// router cannot fail an otherwise complete response.
 	var out chatResponse
-	if err := json.Unmarshal(data, &out); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&out); err != nil {
 		return Message{}, fmt.Errorf("ai: failed to decode response: %w", err)
 	}
 	if out.Error != nil {
