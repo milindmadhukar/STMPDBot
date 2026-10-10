@@ -56,3 +56,14 @@ func TestDiscordTimestampTag(t *testing.T) {
 		t.Errorf("got %s, want %s", out, want)
 	}
 }
+
+func TestDiscordTimestampDisplayHasCopyableTag(t *testing.T) {
+	now := time.Date(2026, 10, 11, 19, 0, 0, 0, time.UTC)
+	out, err := dispatchTimeToolAt(now, "discord_timestamp", `{"time":"20:00","timezone":"UTC"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `"display":"<t:1791748800:F> (` + "`<t:1791748800:F>`" + `)"`; !strings.Contains(out, want) {
+		t.Errorf("got %s, want %s", out, want)
+	}
+}

@@ -26,7 +26,7 @@ func timeTools() []Tool {
 		}},
 		{Type: "function", Function: ToolFunction{
 			Name:        "discord_timestamp",
-			Description: "Convert a time someone mentioned into a Discord timestamp tag like <t:1760205600:F>, which shows in every reader's own timezone. Use this whenever someone gives a time with a timezone, or asks for a time to be converted/shared. Without a date it picks the NEXT time that clock time comes around (later today if still ahead, otherwise tomorrow). Paste the returned \"tag\" into your reply exactly as given -- never compute an epoch yourself.",
+			Description: "Convert a time someone mentioned into a Discord timestamp tag like <t:1760205600:F>, which shows in every reader's own timezone. Use this whenever someone gives a time with a timezone, or asks for a time to be converted/shared. Without a date it picks the NEXT time that clock time comes around (later today if still ahead, otherwise tomorrow). Paste the returned \"display\" into your reply exactly as given -- it shows the rendered time followed by the raw tag in backticks so people can copy it. Never compute an epoch yourself.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -86,8 +86,10 @@ func dispatchTimeToolAt(now time.Time, name, argsJSON string) (string, error) {
 		if !strings.Contains("tTdDfFR", style) || len(style) != 1 {
 			style = "F"
 		}
+		tag := fmt.Sprintf("<t:%d:%s>", t.Unix(), style)
 		return marshalRaw(map[string]any{
-			"tag":      fmt.Sprintf("<t:%d:%s>", t.Unix(), style),
+			"display":  fmt.Sprintf("%s (`%s`)", tag, tag),
+			"tag":      tag,
 			"relative": fmt.Sprintf("<t:%d:R>", t.Unix()),
 			"epoch":    t.Unix(),
 			"resolved": t.Format("Monday 2006-01-02 15:04 MST (-07:00)"),

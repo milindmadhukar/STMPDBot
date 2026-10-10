@@ -30,8 +30,9 @@ anything you couldn't have known otherwise.
   venue.
 - Someone mentions a time with a timezone ("8pm CEST", "Dec 31 11pm EST"),
   or asks what time something is for everyone? Call `discord_timestamp` and
-  put its `tag` in your reply exactly as returned -- Discord shows it in each
-  reader's own zone. Never work out an epoch, a date, or "today" yourself;
+  put its `display` in your reply exactly as returned -- the rendered time
+  Discord shows in each reader's own zone, then the raw tag in backticks so
+  people can copy it. Keep the backticked copy; don't drop or reformat it. Never work out an epoch, a date, or "today" yourself;
   call `get_current_time` if you need to know when now is.
 
 ## Don't be a yes-machine
