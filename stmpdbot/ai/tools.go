@@ -68,6 +68,7 @@ func Tools() []Tool {
 		}},
 	}
 	tools = append(tools, memoryTools()...)
+	tools = append(tools, timeTools()...)
 	return tools
 }
 
@@ -78,6 +79,8 @@ func Dispatch(ctx context.Context, queries *db.Queries, mem *Memory, guildID, us
 	switch name {
 	case "remember", "recall", "update_memory", "forget":
 		return dispatchMemoryTool(ctx, mem, guildID, userID, name, argsJSON)
+	case "get_current_time", "discord_timestamp":
+		return dispatchTimeTool(name, argsJSON)
 	case "search_songs":
 		var args struct {
 			Query string `json:"query"`
