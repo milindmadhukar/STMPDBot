@@ -188,7 +188,7 @@ func resolveZone(name string) (*time.Location, error) {
 	// "UTC+2", "GMT-5:30"
 	for _, prefix := range []string{"UTC", "GMT"} {
 		if rest, ok := strings.CutPrefix(up, prefix); ok && rest != "" {
-			var sign, hh, mm int = 1, 0, 0
+			sign, hh, mm := 1, 0, 0
 			switch rest[0] {
 			case '+':
 			case '-':
