@@ -223,6 +223,7 @@ func GetBeatportReleases(b *stmpdbot.STMPDBot, ticker *time.Ticker) {
 					Int32: int32(track.ID),
 					Valid: true,
 				},
+				ReleaseDate: track.ReleaseDate,
 			})
 
 			// The recording is already stored under a different beatport track id.
@@ -393,7 +394,8 @@ func GetBeatportReleases(b *stmpdbot.STMPDBot, ticker *time.Ticker) {
 					Int32: int32(track.ID),
 					Valid: true,
 				},
-				Source: song.Source,
+				Source:      song.Source,
+				ReleaseDate: song.ReleaseDate,
 			})
 
 			// Announce only rows that have never been announced and are actually

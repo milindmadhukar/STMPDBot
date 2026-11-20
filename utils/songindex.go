@@ -21,6 +21,11 @@ const (
 	MatchBaseKeyVariant  MatchTier = "base_key"
 	MatchFuzzyTitle      MatchTier = "fuzzy_title"
 
+	// MatchSameReleaseDay is the last inferred tier: a row released on the same day
+	// whose credit is recognisably this one despite a fault in one catalogue's data.
+	// See sameDayRecording for exactly what it forgives.
+	MatchSameReleaseDay MatchTier = "same_release_day"
+
 	// MatchAlreadyRepresented means the recording is in the table, but under a
 	// different beatport track id, so this row cannot take the incoming id.
 	//
@@ -68,6 +73,7 @@ type SongIndex struct {
 	byMatchKey        map[string][]int
 	byBaseKey         map[string][]int
 	byArtistSet       map[string][]int
+	byReleaseDate     map[string][]int
 }
 
 func NewSongIndex(rows []db.GetAllSongsForMatchingRow) *SongIndex {
@@ -80,6 +86,7 @@ func NewSongIndex(rows []db.GetAllSongsForMatchingRow) *SongIndex {
 		byMatchKey:        make(map[string][]int, len(rows)),
 		byBaseKey:         make(map[string][]int, len(rows)),
 		byArtistSet:       make(map[string][]int, len(rows)),
+		byReleaseDate:     make(map[string][]int),
 	}
 	for i := range rows {
 		ix.add(i)
@@ -116,6 +123,10 @@ func (ix *SongIndex) add(i int) {
 	ix.byMatchKey[matchKey] = append(ix.byMatchKey[matchKey], i)
 	ix.byBaseKey[baseKey] = append(ix.byBaseKey[baseKey], i)
 	ix.byArtistSet[ArtistSetKey(r.Artists)] = append(ix.byArtistSet[ArtistSetKey(r.Artists)], i)
+
+	if d := r.ReleaseDate.String; r.ReleaseDate.Valid && d != "" {
+		ix.byReleaseDate[d] = append(ix.byReleaseDate[d], i)
+	}
 }
 
 // Append registers a row inserted during this cycle, so that later releases in the
@@ -232,6 +243,10 @@ type SongQuery struct {
 	BeatportID        pgtype.Int4
 	BeatportReleaseID pgtype.Int4
 	SpotifyURL        string
+
+	// ReleaseDate is YYYY-MM-DD, as both catalogues write it. It is what admits a
+	// query to the same-release-day tier, and nothing else reads it.
+	ReleaseDate string
 }
 
 // Lookup resolves a query to a stored row, returning the tier that identified it.
@@ -353,11 +368,88 @@ func (ix *SongIndex) Lookup(q SongQuery) (*db.GetAllSongsForMatchingRow, MatchTi
 		}
 	}
 
+	// Same release day. Everything above requires the artist set to agree exactly,
+	// which is right almost always and wrong whenever one catalogue mangles the
+	// credit: on 2026-11-13 the STMPD dataset filed "Break It Down" with its title
+	// and artists swapped, and on 2026-11-20 it credited "Lucas & Steven" where
+	// beatport has "Lucas & Steve". Both songs were announced twice. A release on
+	// the same day is what makes a looser credit comparison safe: the label puts
+	// out a handful of records a week, never two of the same song.
+	if q.ReleaseDate != "" {
+		for _, i := range ix.byReleaseDate[q.ReleaseDate] {
+			if ix.claimedByAnother(i, q) {
+				note(i)
+				continue
+			}
+			row := ix.rows[i]
+			if agree, _ := variantsOf(q, row); !agree {
+				continue
+			}
+			if sameDayRecording(q.Title, q.Artists, row.Name, row.Artists) {
+				return &ix.rows[i], MatchSameReleaseDay
+			}
+		}
+	}
+
 	if owned != nil {
 		return owned, MatchAlreadyRepresented
 	}
 
 	return nil, MatchNone
+}
+
+// artistKeyThreshold is how alike two artist-set keys must be to count as one credit
+// misspelled. "lucas+sickindividuals+steve" against "...+steven" scores 0.96; two
+// different acts sharing a title on one day would have to collide far more closely.
+const artistKeyThreshold = 0.85
+
+// sameDayRecording reports whether two credits released on the same day describe
+// one recording, forgiving the two faults the catalogues have actually shown:
+//
+//   - the same title by an artist set that is misspelled, or that one side extends
+//     with an extra credit ("Lucas & Steven" for "Lucas & Steve");
+//   - the title and the artists swapped on one side ("Firebeatz & Skytech" by
+//     "Break It Down").
+//
+// The base titles must still agree exactly in the first case, so this never pairs
+// two different songs that merely share some artists.
+func sameDayRecording(titleA, artistsA, titleB, artistsB string) bool {
+	baseA, _ := SplitVariant(titleA, "", "")
+	baseB, _ := SplitVariant(titleB, "", "")
+	if baseA != "" && baseA == baseB && artistsResemble(artistsA, artistsB) {
+		return true
+	}
+	return RolesSwapped(titleA, artistsA, titleB, artistsB)
+}
+
+// artistsResemble reports whether two credit strings name the same act, allowing one
+// to add a credit the other omits or to misspell a name.
+func artistsResemble(a, b string) bool {
+	ka, kb := ArtistSetKey(a), ArtistSetKey(b)
+	if ka == "" || kb == "" {
+		return false
+	}
+	if ka == kb || ArtistsSubsume(a, b) || ArtistsSubsume(b, a) {
+		return true
+	}
+	return IsCloseMatch(ka, kb, artistKeyThreshold)
+}
+
+// RolesSwapped reports whether one side has its title and its artists the wrong way
+// round relative to the other. The comparison is the same one the index makes
+// anywhere else -- an order-independent artist set, a normalized base title -- just
+// with one side's fields exchanged, and it is tried in both directions because
+// either catalogue could be the one at fault.
+func RolesSwapped(titleA, artistsA, titleB, artistsB string) bool {
+	swapped := func(title, artists, otherTitle, otherArtists string) bool {
+		set := ArtistSetKey(title)
+		base, _ := SplitVariant(artists, "", "")
+		otherBase, _ := SplitVariant(otherTitle, "", "")
+		return set != "" && base != "" &&
+			set == ArtistSetKey(otherArtists) && base == otherBase
+	}
+	return swapped(titleA, artistsA, titleB, artistsB) ||
+		swapped(titleB, artistsB, titleA, artistsA)
 }
 
 // ownedByAnotherBeatportTrack reports whether the only thing standing between this

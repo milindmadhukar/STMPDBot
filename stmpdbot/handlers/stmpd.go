@@ -157,7 +157,20 @@ func runStmpdCycle(ctx context.Context, b *stmpdbot.STMPDBot, client *utils.Sani
 		// name, artists or date have since been rewritten; the remaining tiers are
 		// what let a beatport-sourced row be recognised and gain its links.
 		if matched, tier := index.Lookup(release.Query()); matched != nil {
-			rows, err := b.Queries.UpdateSongWithStmpdRelease(ctx, params.update(matched.ID))
+			update := params.update(matched.ID)
+			// The catalogue is normally the authority for a song's name, but not when
+			// it has the title and artists the wrong way round -- as it did for
+			// "Break It Down" on 2026-11-13. Writing the name through would put
+			// "Firebeatz & Skytech" back on a row beatport had already corrected, and
+			// the update cannot fix the artists to match because it never writes them.
+			if utils.RolesSwapped(release.Title, release.Artists, matched.Name, matched.Artists) {
+				update.Title = pgtype.Text{}
+				slog.Warn("STMPD release has its title and artists swapped; keeping the stored name",
+					slog.String("slug", release.Slug),
+					slog.String("title", release.Title), slog.String("artists", release.Artists),
+					slog.Int64("song_id", matched.ID))
+			}
+			rows, err := b.Queries.UpdateSongWithStmpdRelease(ctx, update)
 			if err == nil {
 				index.Claim(matched, release.Slug)
 			}
@@ -215,6 +228,7 @@ func runStmpdCycle(ctx context.Context, b *stmpdbot.STMPDBot, client *utils.Sani
 			ID: song.ID, Name: song.Name, Artists: song.Artists, Source: song.Source,
 			StmpdSlug: song.StmpdSlug, SpotifyUrl: song.SpotifyUrl,
 			BeatportReleaseID: song.BeatportReleaseID, MixName: song.MixName,
+			ReleaseDate: song.ReleaseDate,
 		})
 
 		announceSong(ctx, b, notifier, song, params.Thumbnail.String)

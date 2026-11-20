@@ -384,7 +384,8 @@ UPDATE songs SET beatport_updated = TRUE WHERE id = $1;
 
 -- name: GetAllSongsForMatching :many
 SELECT id, name, artists, source, beatport_id, beatport_release_id,
-       stmpd_slug, match_key, base_key, mix_name, spotify_url, stmpd_synced_at
+       stmpd_slug, match_key, base_key, mix_name, spotify_url, stmpd_synced_at,
+       release_date
 FROM songs;
 
 -- name: SetSongKeys :execrows
