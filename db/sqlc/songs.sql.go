@@ -178,7 +178,8 @@ func (q *Queries) DoesSongExist(ctx context.Context, arg DoesSongExistParams) (b
 
 const getAllSongsForMatching = `-- name: GetAllSongsForMatching :many
 SELECT id, name, artists, source, beatport_id, beatport_release_id,
-       stmpd_slug, match_key, base_key, mix_name, spotify_url, stmpd_synced_at
+       stmpd_slug, match_key, base_key, mix_name, spotify_url, stmpd_synced_at,
+       release_date
 FROM songs
 `
 
@@ -195,6 +196,7 @@ type GetAllSongsForMatchingRow struct {
 	MixName           pgtype.Text        `json:"mixName"`
 	SpotifyUrl        pgtype.Text        `json:"spotifyUrl"`
 	StmpdSyncedAt     pgtype.Timestamptz `json:"stmpdSyncedAt"`
+	ReleaseDate       pgtype.Text        `json:"releaseDate"`
 }
 
 func (q *Queries) GetAllSongsForMatching(ctx context.Context) ([]GetAllSongsForMatchingRow, error) {
@@ -219,6 +221,7 @@ func (q *Queries) GetAllSongsForMatching(ctx context.Context) ([]GetAllSongsForM
 			&i.MixName,
 			&i.SpotifyUrl,
 			&i.StmpdSyncedAt,
+			&i.ReleaseDate,
 		); err != nil {
 			return nil, err
 		}

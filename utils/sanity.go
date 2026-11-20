@@ -165,6 +165,7 @@ func (r SanityRelease) Query() SongQuery {
 		StmpdSlug:         r.Slug,
 		SpotifyURL:        r.StreamingLinks.Spotify,
 		BeatportReleaseID: BeatportReleaseID(r.StreamingLinks.Beatport),
+		ReleaseDate:       r.ReleaseDate,
 	}
 }
 
